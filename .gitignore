@@ -1,0 +1,51 @@
+# Byte-compiled / optimized files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+.env
+.env.*
+env/
+venv/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Local data artifacts
+data/
+*.db
+*.sqlite
+
+# macOS
+.DS_Store
+
+# IDE / editor metadata
+.idea/
+.vscode/
+.specstory/
+.cursorindexingignore
+*.iml
+
+# PyDrive / OAuth secrets
+client_secrets.json
+credentials.json
+token.json
+
+# Logs and temp files
+*.log
+logs/
+*.swp
+*.swo
+*~
