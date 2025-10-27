@@ -1,0 +1,57 @@
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+
+[project]
+name = "swe-prod-recorder"
+version = "0.1.0"
+description = "A macOS screen activity recorder for software engineer productivity research"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+  {name = "Jennifer Wang", email = "jennjwang@users.noreply.github.com"}
+]
+dependencies = [
+  # Core dependencies from gum
+  "SQLAlchemy>=2.0.0",
+  "aiosqlite",
+  "pydantic>=2.0.0",
+  "python-dotenv>=1.0.0",
+  "greenlet",
+  # Screen capture and monitoring
+  "pillow",
+  "mss",
+  "pynput",
+  "shapely",
+  # macOS-specific
+  "pyobjc-core",
+  "pyobjc-framework-Quartz",
+  "pyobjc-framework-AppKit",
+  # Search and analysis
+  "scikit-learn",
+  "numpy",
+]
+
+[project.optional-dependencies]
+gdrive = [
+  # Optional: Google Drive integration
+  "PyDrive",
+  "PyYAML",
+]
+
+[project.scripts]
+swe-prod-recorder = "gum.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/jennjwang/swe_prod_recorder"
+Repository = "https://github.com/jennjwang/swe_prod_recorder"
+
+[tool.pdm]
+distribution = true
+
+[dependency-groups]
+dev = []
+
+[tool.uv]
+default-groups = ["dev"]
