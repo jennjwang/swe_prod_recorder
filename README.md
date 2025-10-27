@@ -2,7 +2,7 @@
 
 A macOS screen activity recorder built on top of [gum](https://github.com/GeneralUserModels/gum). It guides a participant through selecting the windows they are comfortable sharing, records high-signal screen activity around user interactions, and stores the resulting timeline in a searchable SQLite database.
 
-The project pairs a command-line facilitator (`cli.py`) with an asynchronous observer framework (`gum.py`) and a rich `Screen` observer that captures before/after screenshots, keyboard sessions, scroll events, and inactivity timers.
+The project pairs a command-line facilitator (`cli.py`) with an asynchronous observer framework (`gum.py`) and a `Screen` observer that captures before/after screenshots, keyboard sessions, and mouse events.
 
 ## Architecture
 
