@@ -5,7 +5,7 @@ build-backend = "pdm.backend"
 [project]
 name = "swe-prod-recorder"
 version = "0.1.0"
-description = "A macOS screen activity recorder for software engineer productivity research"
+description = "A screen activity recorder for software engineer productivity research"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
@@ -24,16 +24,21 @@ dependencies = [
   "mss",
   "pynput",
   "shapely",
-  # macOS-specific
-  "pyobjc-core",
-  "pyobjc-framework-Quartz",
-  "pyobjc-framework-AppKit",
   # Search and analysis
   "scikit-learn",
   "numpy",
 ]
 
 [project.optional-dependencies]
+macos = [
+  # Optional: macOS-specific dependencies
+  "pyobjc-core",
+  "pyobjc-framework-Quartz",
+  "pyobjc-framework-AppKit",
+]
+linux = [
+  # Optional: Linux-specific dependencies (will go here)
+]
 gdrive = [
   # Optional: Google Drive integration
   "PyDrive",
