@@ -1,6 +1,6 @@
 # SWE Productivity Recorder
 
-A macOS screen activity recorder built on top of [gum](https://github.com/GeneralUserModels/gum). It guides a participant through selecting the windows they are comfortable sharing, records high-signal screen activity around user interactions, and stores the resulting timeline in a searchable SQLite database.
+A screen activity recorder built on top of [gum](https://github.com/GeneralUserModels/gum). It guides a participant through selecting the windows they are comfortable sharing, records high-signal screen activity around user interactions, and stores the resulting timeline in a searchable SQLite database.
 
 The project pairs a command-line facilitator (`cli.py`) with an asynchronous observer framework (`gum.py`) and a `Screen` observer that captures before/after screenshots, keyboard sessions, and mouse events.
 
@@ -59,6 +59,50 @@ or with pip:
 
 ```bash
 pip install -e ".[gdrive]"
+```
+
+## Usage
+
+Run the recorder with:
+```bash
+swe-prod-recorder [OPTIONS]
+```
+
+```
+usage: swe-prod-recorder [-h] [--user-name USER_NAME] [--debug]
+                         [--scroll-debounce SCROLL_DEBOUNCE]
+                         [--scroll-min-distance SCROLL_MIN_DISTANCE]
+                         [--scroll-max-frequency SCROLL_MAX_FREQUENCY]
+                         [--scroll-session-timeout SCROLL_SESSION_TIMEOUT]
+                         [--upload-to-gdrive]
+                         [--screenshots-dir SCREENSHOTS_DIR]
+                         [--inactivity-timeout INACTIVITY_TIMEOUT]
+
+SWE Productivity Recorder - Screen activity recorder for software engineer
+productivity research
+
+options:
+  -h, --help            show this help message and exit
+  --user-name, -u USER_NAME
+                        The user name to use
+  --debug, -d           Enable debug mode
+  --scroll-debounce SCROLL_DEBOUNCE
+                        Minimum time between scroll events (seconds, default:
+                        0.5)
+  --scroll-min-distance SCROLL_MIN_DISTANCE
+                        Minimum scroll distance to log (pixels, default: 5.0)
+  --scroll-max-frequency SCROLL_MAX_FREQUENCY
+                        Maximum scroll events per second (default: 10)
+  --scroll-session-timeout SCROLL_SESSION_TIMEOUT
+                        Scroll session timeout (seconds, default: 2.0)
+  --upload-to-gdrive    Upload screenshots to Google Drive (default: keep
+                        local)
+  --screenshots-dir SCREENSHOTS_DIR
+                        Directory to save screenshots (default:
+                        data/screenshots)
+  --inactivity-timeout INACTIVITY_TIMEOUT
+                        Stop recording after N minutes of inactivity (default:
+                        45)
 ```
 
 ## Running a Recording Session

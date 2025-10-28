@@ -11,7 +11,7 @@ from .observers import Screen
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="GUM - A Python package with command-line interface"
+        description="SWE Productivity Recorder - Screen activity recorder for software engineer productivity research"
     )
     parser.add_argument(
         "--user-name", "-u", type=str, default="anonymous", help="The user name to use"
