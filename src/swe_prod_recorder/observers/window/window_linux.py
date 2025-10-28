@@ -22,6 +22,11 @@ class WindowSelectionOverlay(QWidget):
         self.wm_territory.xref_x_session(self.x_tree)
 
         self.windows = self._get_selectable_windows()
+        print(f"Found {len(self.windows)} selectable windows:")
+        for w in self.windows[:5]:  # Print first 5
+            print(
+                f"  {w['title']}: x={w['left']}, y={w['top']}, w={w['width']}, h={w['height']}"
+            )
 
         # Setup UI
         self.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint | Qt.Tool)
@@ -31,19 +36,34 @@ class WindowSelectionOverlay(QWidget):
 
     def _get_selectable_windows(self):
         windows = []
+
+        print(f"WM territory has {len(self.wm_territory.windows)} windows")
+
         for wm_win in self.wm_territory.windows:
+            print(
+                f"WM window: {wm_win.title}, x_win_id={getattr(wm_win, 'x_win_id', 'NOT SET')}"
+            )
+
+            if not hasattr(wm_win, "x_win_id"):
+                continue
+
             x_win = self.x_tree.select_id(wm_win.x_win_id)
-            if x_win and x_win.geom:
-                windows.append(
-                    {
-                        "id": wm_win.win_id,
-                        "title": wm_win.title,
-                        "left": int(x_win.geom.abs_x),
-                        "top": int(x_win.geom.abs_y),
-                        "width": int(x_win.geom.width),
-                        "height": int(x_win.geom.height),
-                    }
-                )
+            print(f"  Found x_win: {x_win is not None}")
+
+            if x_win:
+                print(f"  Has geom: {x_win.geom is not None}")
+                if x_win.geom:
+                    windows.append(
+                        {
+                            "id": wm_win.win_id,
+                            "title": wm_win.title,
+                            "left": int(x_win.geom.abs_x),
+                            "top": int(x_win.geom.abs_y),
+                            "width": int(x_win.geom.width),
+                            "height": int(x_win.geom.height),
+                        }
+                    )
+
         return windows
 
     def mouseMoveEvent(self, event):
@@ -53,25 +73,31 @@ class WindowSelectionOverlay(QWidget):
         for win in self.windows:
             rect = QRect(win["left"], win["top"], win["width"], win["height"])
             if rect.contains(pos):
+                print(f"Hovering over: {win['title']}")
                 self.highlighted_window = win
                 break
 
         self.update()
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton and self.highlighted_window:
-            win_id = self.highlighted_window["id"]
+        print(f"DEBUG: Click at {event.pos()}")
+        print(f"DEBUG: Highlighted: {self.highlighted_window}")
+        if event.button() == Qt.LeftButton:
+            if self.highlighted_window:
+                # Handle window selection
+                win_id = self.highlighted_window["id"]
 
-            for i, w in enumerate(self.selected_windows):
-                if w["id"] == win_id:
-                    self.selected_windows.pop(i)
-                    print(f"✗ Deselected (total: {len(self.selected_windows)})")
-                    self.update()
-                    return
+                for i, w in enumerate(self.selected_windows):
+                    if w["id"] == win_id:
+                        self.selected_windows.pop(i)
+                        print(f"✗ Deselected (total: {len(self.selected_windows)})")
+                        self.update()
+                        return
 
-            self.selected_windows.append(self.highlighted_window.copy())
-            print(f"✓ Selected (total: {len(self.selected_windows)})")
-            self.update()
+                self.selected_windows.append(self.highlighted_window.copy())
+                print(f"✓ Selected (total: {len(self.selected_windows)})")
+                self.update()
+            # If no window highlighted, click passes through automatically
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Escape:
@@ -94,7 +120,10 @@ class WindowSelectionOverlay(QWidget):
 
             painter.setPen(Qt.white)
             painter.setFont(QFont("Arial", 24, QFont.Bold))
-            painter.drawText(rect.adjusted(10, 10, 0, 0), str(idx))
+            # Draw number badge
+            painter.setPen(Qt.white)
+            painter.setFont(QFont("Arial", 24, QFont.Bold))
+            painter.drawText(rect.left() + 10, rect.top() + 40, str(idx))
 
         # Highlighted window - blue
         if (

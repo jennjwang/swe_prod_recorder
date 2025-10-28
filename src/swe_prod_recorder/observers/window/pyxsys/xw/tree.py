@@ -1,5 +1,5 @@
-from .window import ChildWindow, RootWindow, SourceWindow
 from ..colours import colour_str
+from .window import ChildWindow, RootWindow, SourceWindow
 
 
 class WindowTree(object):
@@ -233,7 +233,7 @@ class WindowTree(object):
         Retrieve the first window with matching `win_id` (obviously should be unique).
         """
         try:
-            next(p[0] for p in self.walk() if p if p[0].win_id == win_id)
+            return next(p[0] for p in self.walk() if p if p[0].win_id == win_id)
         except StopIteration:
             return None
 
