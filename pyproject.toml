@@ -30,7 +30,8 @@ dependencies = [
   "pyobjc-core; sys_platform == 'darwin'",
   "pyobjc-framework-Quartz; sys_platform == 'darwin'",
   "pyobjc-framework-Cocoa; sys_platform == 'darwin'",
-  # Optional: Linux-specific dependencies (will go here)
+  # Optional: Linux-specific dependencies
+  "PyQt5>=5.15.0; sys_platform == 'linux'",
 ]
 
 [project.optional-dependencies]
