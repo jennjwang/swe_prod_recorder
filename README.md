@@ -29,12 +29,20 @@ The project pairs a command-line facilitator (`cli.py`) with an asynchronous obs
   - `pyobjc-framework-Quartz`, `pyobjc-framework-AppKit`, `pyobjc-core` (macOS automation APIs)
   - `PyDrive` if you plan to upload to Google Drive.
 
-Install them into a virtual environment:
+Install them into a virtual environment with [uv](https://docs.astral.sh/uv/#installation) venv **(recommended)**:
+
+```bash
+uv venv
+source .venv/bin/activate
+uv sync
+```
+
+or using a Python standard library venv virtual environment:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r pyproject.toml
 ```
 
 ## Running a Recording Session
