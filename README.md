@@ -166,3 +166,8 @@ recorder/
 ├── schemas.py            # pydantic schemas shared across components
 └── __main__.py           # Allows `python -m recorder` execution
 ```
+
+## Attribution
+
+This project is built on top of [GUM (General User Models)](https://github.com/GeneralUserModels/gum).
+The core observer pattern and database architecture are adapted from that project.
