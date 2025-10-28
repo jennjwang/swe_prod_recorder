@@ -29,6 +29,8 @@ The project pairs a command-line facilitator (`cli.py`) with an asynchronous obs
   - `pyobjc-framework-Quartz`, `pyobjc-framework-AppKit`, `pyobjc-core` (macOS automation APIs)
   - `PyDrive` if you plan to upload to Google Drive.
 
+### Installation
+
 Install them into a virtual environment with [uv](https://docs.astral.sh/uv/#installation) venv **(recommended)**:
 
 ```bash
@@ -43,6 +45,20 @@ or using a Python standard library venv virtual environment:
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r pyproject.toml
+```
+
+### Google Drive upload (optional)
+
+To additionally install the `gdrive` extra with uv:
+
+```bash
+uv sync --extra gdrive
+```
+
+or with pip:
+
+```bash
+pip install -e ".[gdrive]"
 ```
 
 ## Running a Recording Session
