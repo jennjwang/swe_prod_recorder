@@ -1,9 +1,6 @@
 from __future__ import annotations
-###############################################################################
-# Imports                                                                     #
-###############################################################################
 
-# — Standard library —
+import asyncio
 import base64
 import gc
 import logging
@@ -11,69 +8,78 @@ import os
 import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from importlib.resources import files as get_package_file
 from typing import Any, Dict, Iterable, List, Optional
 
-import asyncio
-from functools import partial
-
-# — Third-party —
 import mss
-import Quartz
 from PIL import Image, ImageDraw
-from pynput import mouse, keyboard           # still synchronous
+
+try:
+    # Optional dependencies
+    from pydrive.auth import GoogleAuth
+    from pydrive.drive import GoogleDrive
+except ImportError:
+    USE_GDRIVE = False
+else:
+    USE_GDRIVE = True
+from pynput import keyboard, mouse  # still synchronous
 from shapely.geometry import box
 from shapely.ops import unary_union
 
-# — Local —
-from .observer import Observer
 from ..schemas import Update
+from .observer import Observer
 
-# — OpenAI async client —
+try:
+    from .window import select_region_with_mouse
+except ImportError:
+    # TODO: add Linux implementation of mouse selection
+    USE_OSX_MOUSE_SELECT = False
+else:
+    USE_OSX_MOUSE_SELECT = True
+
 # from openai import AsyncOpenAI
 # client = AsyncOpenAI()
 
-# — Google Drive —
-from pydrive.auth import GoogleAuth
-from pydrive.drive import GoogleDrive
-
-from .window import select_region_with_mouse
 
 def initialize_google_drive(client_secrets_path: str = None) -> GoogleDrive:
     """
     Initialize Google Drive authentication with optional custom client_secrets.json path.
-    
+
     Parameters
     ----------
     client_secrets_path : str, optional
         Path to the client_secrets.json file. If None, uses default location.
-        
+
     Returns
     -------
     GoogleDrive
         Authenticated Google Drive client
     """
     gauth = GoogleAuth()
-    
+
     if client_secrets_path:
         # Expand user path and get absolute path
         client_secrets_path = os.path.abspath(os.path.expanduser(client_secrets_path))
-        
+
         # Verify the file exists
         if not os.path.exists(client_secrets_path):
-            raise FileNotFoundError(f"Client secrets file not found: {client_secrets_path}")
-        
+            raise FileNotFoundError(
+                f"Client secrets file not found: {client_secrets_path}"
+            )
+
         # Copy the client_secrets.json to current directory temporarily
         import shutil
+
         temp_client_secrets = "client_secrets.json"
-        
+
         try:
             shutil.copy2(client_secrets_path, temp_client_secrets)
             print(f"✅ Copied client_secrets.json to current directory")
-            
+
             # Use default behavior (PyDrive will find client_secrets.json in current directory)
             gauth.LocalWebserverAuth()  # Opens browser for first-time authentication
-            
+
         finally:
             # Clean up temporary file
             try:
@@ -84,30 +90,40 @@ def initialize_google_drive(client_secrets_path: str = None) -> GoogleDrive:
     else:
         # Use default behavior (looks for client_secrets.json in current directory)
         gauth.LocalWebserverAuth()  # Opens browser for first-time authentication
-    
+
     return GoogleDrive(gauth)
+
 
 # Initialize with default behavior (looks for client_secrets.json in current directory)
 # drive = initialize_google_drive()
 
+
 def list_folders(drive: GoogleDrive):
     """List all folders in Google Drive to help find folder IDs"""
-    folders = drive.ListFile({'q': "mimeType='application/vnd.google-apps.folder' and trashed=false"}).GetList()
+    folders = drive.ListFile(
+        {"q": "mimeType='application/vnd.google-apps.folder' and trashed=false"}
+    ).GetList()
     print("Available folders:")
     for folder in folders:
         print(f"Name: {folder['title']}, ID: {folder['id']}")
     return folders
 
+
 def find_folder_by_name(folder_name: str, drive: GoogleDrive):
     """Find a folder by name and return its ID"""
-    folders = drive.ListFile({'q': f"mimeType='application/vnd.google-apps.folder' and title='{folder_name}' and trashed=false"}).GetList()
+    folders = drive.ListFile(
+        {
+            "q": f"mimeType='application/vnd.google-apps.folder' and title='{folder_name}' and trashed=false"
+        }
+    ).GetList()
     if folders:
-        return folders[0]['id']
+        return folders[0]["id"]
     return None
+
 
 def upload_file(path: str, drive_dir: str, drive_instance: GoogleDrive):
     """Upload a file to Google Drive and delete the local file.
-    
+
     Parameters
     ----------
     path : str
@@ -117,13 +133,13 @@ def upload_file(path: str, drive_dir: str, drive_instance: GoogleDrive):
     drive_instance : GoogleDrive
         Google Drive client instance.
     """
-    upload_file = drive_instance.CreateFile({
-        'title': path.split('/')[-1],
-        'parents': [{'id': drive_dir}]
-    })
+    upload_file = drive_instance.CreateFile(
+        {"title": path.split("/")[-1], "parents": [{"id": drive_dir}]}
+    )
     upload_file.SetContentFile(path)
     upload_file.Upload()
     os.remove(path)
+
 
 ###############################################################################
 # Window‑geometry helpers                                                     #
@@ -137,6 +153,8 @@ def _get_global_bounds() -> tuple[float, float, float, float]:
     -------
     (min_x, min_y, max_x, max_y) tuple in Quartz global coordinates.
     """
+    import Quartz
+
     err, ids, cnt = Quartz.CGGetActiveDisplayList(16, None, None)
     if err != Quartz.kCGErrorSuccess:  # pragma: no cover (defensive)
         raise OSError(f"CGGetActiveDisplayList failed: {err}")
@@ -159,6 +177,8 @@ def _get_visible_windows() -> List[tuple[dict, float]]:
     is in ``[0.0, 1.0]``.  Internal system windows (Dock, WindowServer, …) are
     ignored.
     """
+    import Quartz
+
     _, _, _, gmax_y = _get_global_bounds()
 
     opts = (
@@ -198,12 +218,15 @@ def _get_visible_windows() -> List[tuple[dict, float]]:
 
     return result
 
+
 def _get_window_by_name(window_name: str) -> Optional[tuple[int, dict]]:
     """Get window ID and bounds by owner name.
 
     Returns (window_id, bounds_dict) or None if not found.
     Bounds dict has 'left', 'top', 'width', 'height' in top-left origin coordinates.
     """
+    import Quartz
+
     _, _, _, gmax_y = _get_global_bounds()
 
     opts = (
@@ -238,6 +261,8 @@ def _get_window_bounds_by_id(window_id: int) -> Optional[dict]:
 
     Returns bounds dict with 'left', 'top', 'width', 'height' in top-left origin coordinates.
     """
+    import Quartz
+
     _, _, _, gmax_y = _get_global_bounds()
 
     opts = (
@@ -262,14 +287,14 @@ def _get_window_bounds_by_id(window_id: int) -> Optional[dict]:
     return None
 
 
-
-
 def list_available_windows() -> List[str]:
     """List all available window names that can be tracked.
 
     Returns a list of window owner names that are currently visible.
     Excludes system windows like Dock and WindowServer.
     """
+    import Quartz
+
     opts = (
         Quartz.kCGWindowListOptionOnScreenOnly
         | Quartz.kCGWindowListOptionIncludingWindow
@@ -297,9 +322,11 @@ def _is_app_visible(names: Iterable[str]) -> bool:
         for info, ratio in _get_visible_windows()
     )
 
+
 ###############################################################################
 # Screen observer                                                             #
 ###############################################################################
+
 
 class Screen(Observer):
     """
@@ -322,11 +349,11 @@ class Screen(Observer):
     _CAPTURE_FPS: int = 5  # Lower FPS to reduce CPU/memory usage
     _PERIODIC_SEC: int = 30
     _DEBOUNCE_SEC: int = 1
-    _MON_START: int = 1     # first real display in mss
+    _MON_START: int = 1  # first real display in mss
     _MEMORY_CLEANUP_INTERVAL: int = 10  # More frequent GC to prevent memory buildup
     _MAX_WORKERS: int = 4  # Limit thread pool size to prevent exhaustion
     _MAX_SCREENSHOT_AGE: int = 3600  # Delete screenshots older than 1 hour (in seconds)
-    
+
     # Scroll filtering constants
     _SCROLL_DEBOUNCE_SEC: float = 0.8  # Minimum time between scroll events
     _SCROLL_MIN_DISTANCE: float = 8.0  # Minimum scroll distance to log
@@ -352,11 +379,14 @@ class Screen(Observer):
         track_window: Optional[str] = None,
         inactivity_timeout: float = 45 * 60,  # 45 minutes in seconds
     ) -> None:
-
         self.screens_dir = os.path.abspath(os.path.expanduser(screenshots_dir))
         os.makedirs(self.screens_dir, exist_ok=True)
 
-        self._guard = {skip_when_visible} if isinstance(skip_when_visible, str) else set(skip_when_visible or [])
+        self._guard = (
+            {skip_when_visible}
+            if isinstance(skip_when_visible, str)
+            else set(skip_when_visible or [])
+        )
         self.upload_to_gdrive = upload_to_gdrive
 
         self.debug = debug
@@ -380,8 +410,12 @@ class Screen(Observer):
 
         # keyboard activity tracking
         self._key_activity_start: Optional[float] = None
-        self._key_activity_timeout: float = keyboard_timeout  # seconds of inactivity to consider session ended
-        self._key_screenshots: List[str] = []  # track intermediate screenshots for cleanup
+        self._key_activity_timeout: float = (
+            keyboard_timeout  # seconds of inactivity to consider session ended
+        )
+        self._key_screenshots: List[
+            str
+        ] = []  # track intermediate screenshots for cleanup
         self._key_activity_lock = asyncio.Lock()
 
         # scroll activity tracking
@@ -398,7 +432,9 @@ class Screen(Observer):
 
         # Window tracking configuration (support for multiple windows)
         self._track_window = track_window  # Keep for backward compatibility
-        self._tracked_windows: List[dict] = []  # List of {"id": window_id, "region": {...}}
+        self._tracked_windows: List[
+            dict
+        ] = []  # List of {"id": window_id, "region": {...}}
         self._current_region_lock = asyncio.Lock()
 
         # Initialize Google Drive with custom client_secrets path if provided
@@ -418,12 +454,7 @@ class Screen(Observer):
         elif target_coordinates:
             # target_coordinates should be (left, top, width, height)
             left, top, width, height = target_coordinates
-            region = {
-                "left": left,
-                "top": top,
-                "width": width,
-                "height": height
-            }
+            region = {"left": left, "top": top, "width": width, "height": height}
             self._tracked_windows.append({"id": None, "region": region})
             if self.debug:
                 print(f"Using target coordinates: {region}")
@@ -439,7 +470,6 @@ class Screen(Observer):
 
             print(f"\nTotal windows/regions selected: {len(self._tracked_windows)}")
 
-
         # call parent
         super().__init__()
 
@@ -451,12 +481,17 @@ class Screen(Observer):
             self._CAPTURE_FPS = 3  # Even lower FPS for high-DPI displays
             self._MEMORY_CLEANUP_INTERVAL = 20  # More frequent cleanup
             if self.debug:
-                logging.getLogger("Screen").info("High-DPI display detected, using conservative settings")
+                logging.getLogger("Screen").info(
+                    "High-DPI display detected, using conservative settings"
+                )
 
     @staticmethod
     def _mon_for(x: float, y: float, mons: list[dict]) -> Optional[int]:
         for idx, m in enumerate(mons, 1):
-            if m["left"] <= x < m["left"] + m["width"] and m["top"] <= y < m["top"] + m["height"]:
+            if (
+                m["left"] <= x < m["left"] + m["width"]
+                and m["top"] <= y < m["top"] + m["height"]
+            ):
                 return idx
         return None
 
@@ -469,26 +504,38 @@ class Screen(Observer):
 
         async with self._current_region_lock:
             for tracked in self._tracked_windows:
-                if tracked["id"] is not None:  # Only update tracked windows (not fixed regions)
-                    new_region = await self._run_in_thread(_get_window_bounds_by_id, tracked["id"])
+                if (
+                    tracked["id"] is not None
+                ):  # Only update tracked windows (not fixed regions)
+                    new_region = await self._run_in_thread(
+                        _get_window_bounds_by_id, tracked["id"]
+                    )
                     if new_region:
                         old_region = tracked["region"]
                         tracked["region"] = new_region
                         # Log if region changed significantly
                         if self.debug and old_region:
-                            if (abs(old_region['left'] - new_region['left']) > 10 or
-                                abs(old_region['top'] - new_region['top']) > 10 or
-                                abs(old_region['width'] - new_region['width']) > 10 or
-                                abs(old_region['height'] - new_region['height']) > 10):
-                                logging.getLogger("Screen").info(f"Window (ID: {tracked['id']}) moved/resized: {new_region}")
+                            if (
+                                abs(old_region["left"] - new_region["left"]) > 10
+                                or abs(old_region["top"] - new_region["top"]) > 10
+                                or abs(old_region["width"] - new_region["width"]) > 10
+                                or abs(old_region["height"] - new_region["height"]) > 10
+                            ):
+                                logging.getLogger("Screen").info(
+                                    f"Window (ID: {tracked['id']}) moved/resized: {new_region}"
+                                )
                     else:
                         if self.debug:
-                            logging.getLogger("Screen").warning(f"Tracked window (ID: {tracked['id']}) not found")
+                            logging.getLogger("Screen").warning(
+                                f"Tracked window (ID: {tracked['id']}) not found"
+                            )
 
     def _is_point_in_region(self, x: float, y: float, region: dict) -> bool:
         """Check if a point (in global coordinates) is inside a region."""
-        return (region["left"] <= x < region["left"] + region["width"] and
-                region["top"] <= y < region["top"] + region["height"])
+        return (
+            region["left"] <= x < region["left"] + region["width"]
+            and region["top"] <= y < region["top"] + region["height"]
+        )
 
     def _find_region_for_point(self, x: float, y: float) -> Optional[dict]:
         """Find which tracked window/region contains this point.
@@ -508,7 +555,9 @@ class Screen(Observer):
     async def _run_in_thread(self, func, *args, **kwargs):
         """Run a function in the custom thread pool."""
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(self._thread_pool, lambda: func(*args, **kwargs))
+        return await loop.run_in_executor(
+            self._thread_pool, lambda: func(*args, **kwargs)
+        )
 
     def _detect_high_dpi(self) -> bool:
         """Detect if running on a high-DPI display and adjust settings."""
@@ -516,7 +565,7 @@ class Screen(Observer):
             # Check if any monitor has high resolution (likely Retina)
             with mss.mss() as sct:
                 for monitor in sct.monitors[1:]:  # Skip monitor 0 (all monitors)
-                    if monitor['width'] > 2560 or monitor['height'] > 1600:
+                    if monitor["width"] > 2560 or monitor["height"] > 1600:
                         return True
         except Exception:
             pass
@@ -525,33 +574,39 @@ class Screen(Observer):
     def _should_log_scroll(self, x: float, y: float, dx: float, dy: float) -> bool:
         """
         Determine if a scroll event should be logged based on filtering criteria.
-        
+
         Returns True if the scroll event should be logged, False otherwise.
         """
         current_time = time.time()
-        
+
         # Check if this is a new scroll session
-        if (self._scroll_session_start is None or 
-            current_time - self._scroll_session_start > self._scroll_session_timeout):
+        if (
+            self._scroll_session_start is None
+            or current_time - self._scroll_session_start > self._scroll_session_timeout
+        ):
             # Start new session
             self._scroll_session_start = current_time
             self._scroll_event_count = 0
             self._scroll_last_position = (x, y)
             self._scroll_last_time = current_time
             return True
-        
+
         # Check debounce time
-        if (self._scroll_last_time is not None and 
-            current_time - self._scroll_last_time < self._scroll_debounce_sec):
+        if (
+            self._scroll_last_time is not None
+            and current_time - self._scroll_last_time < self._scroll_debounce_sec
+        ):
             return False
-        
+
         # Check minimum distance
         if self._scroll_last_position is not None:
-            distance = ((x - self._scroll_last_position[0]) ** 2 + 
-                       (y - self._scroll_last_position[1]) ** 2) ** 0.5
+            distance = (
+                (x - self._scroll_last_position[0]) ** 2
+                + (y - self._scroll_last_position[1]) ** 2
+            ) ** 0.5
             if distance < self._scroll_min_distance:
                 return False
-        
+
         # Check frequency limit
         self._scroll_event_count += 1
         session_duration = current_time - self._scroll_session_start
@@ -559,11 +614,11 @@ class Screen(Observer):
             frequency = self._scroll_event_count / session_duration
             if frequency > self._scroll_max_frequency:
                 return False
-        
+
         # Update tracking state
         self._scroll_last_position = (x, y)
         self._scroll_last_time = current_time
-        
+
         return True
 
     async def _cleanup_key_screenshots(self) -> None:
@@ -579,7 +634,9 @@ class Screen(Observer):
             try:
                 await self._run_in_thread(os.remove, path)
                 if self.debug:
-                    logging.getLogger("Screen").info(f"Deleted intermediate screenshot: {path}")
+                    logging.getLogger("Screen").info(
+                        f"Deleted intermediate screenshot: {path}"
+                    )
             except OSError:
                 pass  # File might already be deleted
 
@@ -591,11 +648,13 @@ class Screen(Observer):
 
             for filename in await self._run_in_thread(os.listdir, self.screens_dir):
                 filepath = os.path.join(self.screens_dir, filename)
-                if not filename.endswith('.jpg'):
+                if not filename.endswith(".jpg"):
                     continue
 
                 try:
-                    file_age = current_time - await self._run_in_thread(os.path.getmtime, filepath)
+                    file_age = current_time - await self._run_in_thread(
+                        os.path.getmtime, filepath
+                    )
                     if file_age > self._MAX_SCREENSHOT_AGE:
                         await self._run_in_thread(os.remove, filepath)
                         deleted_count += 1
@@ -603,13 +662,24 @@ class Screen(Observer):
                     pass  # File might have been deleted already
 
             if deleted_count > 0 and self.debug:
-                logging.getLogger("Screen").info(f"Cleaned up {deleted_count} old screenshots")
+                logging.getLogger("Screen").info(
+                    f"Cleaned up {deleted_count} old screenshots"
+                )
         except Exception as e:
             if self.debug:
                 logging.getLogger("Screen").error(f"Error cleaning up screenshots: {e}")
 
     # ─────────────────────────────── I/O helpers
-    async def _save_frame(self, frame, monitor_rect: dict, x, y, tag: str, box_color: str = "red", box_width: int = 10) -> str:
+    async def _save_frame(
+        self,
+        frame,
+        monitor_rect: dict,
+        x,
+        y,
+        tag: str,
+        box_color: str = "red",
+        box_width: int = 10,
+    ) -> str:
         """
         Save a frame with bounding box and crosshair at the given position.
 
@@ -628,15 +698,15 @@ class Screen(Observer):
         box_width : int
             Width of bounding box outline
         """
-        ts   = f"{time.time():.5f}"
+        ts = f"{time.time():.5f}"
         path = os.path.join(self.screens_dir, f"{ts}_{tag}.jpg")
         image = Image.frombytes("RGB", (frame.width, frame.height), frame.rgb)
         draw = ImageDraw.Draw(image)
 
         # Compute actual scale factor from frame vs monitor dimensions
         # This handles any DPI (1.0x, 1.5x, 2.0x, 2.5x, etc.) correctly
-        scale_x = frame.width / monitor_rect['width']
-        scale_y = frame.height / monitor_rect['height']
+        scale_x = frame.width / monitor_rect["width"]
+        scale_y = frame.height / monitor_rect["height"]
 
         # Convert logical point coordinates to physical pixel coordinates
         x_pixel = int(x * scale_x)
@@ -666,13 +736,17 @@ class Screen(Observer):
         # Horizontal line
         h_x1 = max(0, x_pixel - crosshair_size)
         h_x2 = min(frame.width, x_pixel + crosshair_size)
-        draw.line([(h_x1, y_pixel), (h_x2, y_pixel)], fill=box_color, width=crosshair_width)
+        draw.line(
+            [(h_x1, y_pixel), (h_x2, y_pixel)], fill=box_color, width=crosshair_width
+        )
 
         # Vertical line
         v_y1 = max(0, y_pixel - crosshair_size)
         v_y2 = min(frame.height, y_pixel + crosshair_size)
-        draw.line([(x_pixel, v_y1), (x_pixel, v_y2)], fill=box_color, width=crosshair_width)
-        
+        draw.line(
+            [(x_pixel, v_y1), (x_pixel, v_y2)], fill=box_color, width=crosshair_width
+        )
+
         # Save with lower quality to reduce memory usage and disk I/O
         await self._run_in_thread(
             image.save,
@@ -681,19 +755,22 @@ class Screen(Observer):
             quality=50,  # Reduced to 50 for better performance
             optimize=True,  # Enable optimization
         )
-        
+
         # Explicitly delete image objects to free memory
         del draw
         del image
-        
+
         # upload to google drive and delete local file
         # if self.gdrive_dir is not None:
         #     await asyncio.to_thread(upload_file, path, self.gdrive_dir, self.drive)
         return path
 
     async def _process_and_emit(
-        self, before_path: str, after_path: str | None, 
-        action: str | None, ev: dict | None,
+        self,
+        before_path: str,
+        after_path: str | None,
+        action: str | None,
+        ev: dict | None,
     ) -> None:
         if "scroll" in action:
             # Include scroll delta information
@@ -710,19 +787,19 @@ class Screen(Observer):
     async def stop(self) -> None:
         """Stop the observer and clean up resources."""
         await super().stop()
-        
+
         # Clean up frame objects
         async with self._frame_lock:
             for frame in self._frames.values():
                 if frame is not None:
                     del frame
             self._frames.clear()
-        
+
         # Force garbage collection
         await self._run_in_thread(gc.collect)
-        
+
         # Shutdown thread pool
-        if hasattr(self, '_thread_pool'):
+        if hasattr(self, "_thread_pool"):
             self._thread_pool.shutdown(wait=True)
 
     # ─────────────────────────────── skip guard
@@ -730,16 +807,20 @@ class Screen(Observer):
         return _is_app_visible(self._guard) if self._guard else False
 
     # ─────────────────────────────── main async worker
-    async def _worker(self) -> None:          # overrides base class
+    async def _worker(self) -> None:  # overrides base class
         log = logging.getLogger("Screen")
         if self.debug:
-            logging.basicConfig(level=logging.INFO, format="%(asctime)s [Screen] %(message)s", datefmt="%H:%M:%S")
+            logging.basicConfig(
+                level=logging.INFO,
+                format="%(asctime)s [Screen] %(message)s",
+                datefmt="%H:%M:%S",
+            )
         else:
             log.addHandler(logging.NullHandler())
             log.propagate = False
 
-        CAP_FPS  = self._CAPTURE_FPS
-        PERIOD   = self._PERIODIC_SEC
+        CAP_FPS = self._CAPTURE_FPS
+        PERIOD = self._PERIODIC_SEC
         DEBOUNCE = self._DEBOUNCE_SEC
 
         loop = asyncio.get_running_loop()
@@ -754,7 +835,9 @@ class Screen(Observer):
             if self._tracked_windows:
                 # Use the tracked windows/regions
                 if self.debug:
-                    log.info(f"Recording {len(self._tracked_windows)} window(s)/region(s)")
+                    log.info(
+                        f"Recording {len(self._tracked_windows)} window(s)/region(s)"
+                    )
             else:
                 # Use all monitors (backward compatibility)
                 if self.debug:
@@ -783,7 +866,11 @@ class Screen(Observer):
                 asyncio.run_coroutine_threadsafe(key_event(key, typ), loop)
 
             mouse_listener = mouse.Listener(
-                on_click=lambda x, y, btn, prs: schedule_event(x, y, f"click_{btn.name}") if prs else None,
+                on_click=lambda x, y, btn, prs: schedule_event(
+                    x, y, f"click_{btn.name}"
+                )
+                if prs
+                else None,
                 on_scroll=lambda x, y, dx, dy: schedule_scroll_event(x, y, dx, dy),
             )
             key_listener = keyboard.Listener(
@@ -811,14 +898,18 @@ class Screen(Observer):
                 mon_rect = ev["monitor_rect"]
                 if mon_rect is None:
                     if self.debug:
-                        logging.getLogger("Screen").warning("Monitor region not available")
+                        logging.getLogger("Screen").warning(
+                            "Monitor region not available"
+                        )
                     return
 
                 try:
                     aft = await self._run_in_thread(sct.grab, mon_rect)
                 except Exception as e:
                     if self.debug:
-                        logging.getLogger("Screen").error(f"Failed to capture after frame: {e}")
+                        logging.getLogger("Screen").error(
+                            f"Failed to capture after frame: {e}"
+                        )
                     return
 
                 if "scroll" in ev["type"]:
@@ -827,8 +918,16 @@ class Screen(Observer):
                 else:
                     step = f"{ev['type']}({ev['position'][0]:.1f}, {ev['position'][1]:.1f})"
 
-                bef_path = await self._save_frame(ev["before"], ev["monitor_rect"], ev["position"][0], ev["position"][1], f"{step}_before")
-                aft_path = await self._save_frame(aft, mon_rect, ev["position"][0], ev["position"][1], f"{step}_after")
+                bef_path = await self._save_frame(
+                    ev["before"],
+                    ev["monitor_rect"],
+                    ev["position"][0],
+                    ev["position"][1],
+                    f"{step}_before",
+                )
+                aft_path = await self._save_frame(
+                    aft, mon_rect, ev["position"][0], ev["position"][1], f"{step}_after"
+                )
                 await self._process_and_emit(bef_path, aft_path, ev["type"], ev)
 
                 log.info(f"{ev['type']} captured on window {ev['mon']}")
@@ -839,7 +938,9 @@ class Screen(Observer):
                 tracked = self._find_region_for_point(x, y)
                 if tracked is None:
                     if self.debug:
-                        log.info(f"{typ:<6} @({x:7.1f},{y:7.1f}) outside tracked window(s), skipping")
+                        log.info(
+                            f"{typ:<6} @({x:7.1f},{y:7.1f}) outside tracked window(s), skipping"
+                        )
                     return
 
                 # Update regions for tracked windows
@@ -868,7 +969,13 @@ class Screen(Observer):
                 # Update activity timestamp
                 await self._update_activity_time()
 
-                self._pending_event = {"type": typ, "position": (rel_x, rel_y), "mon": idx, "before": bf, "monitor_rect": mon}
+                self._pending_event = {
+                    "type": typ,
+                    "position": (rel_x, rel_y),
+                    "mon": idx,
+                    "before": bf,
+                    "monitor_rect": mon,
+                }
 
                 # Process asynchronously - don't wait for completion
                 asyncio.create_task(flush())
@@ -882,7 +989,9 @@ class Screen(Observer):
                 tracked = self._find_region_for_point(x, y)
                 if tracked is None:
                     if self.debug:
-                        log.info(f"Key {typ}: {str(key)} outside tracked window(s), skipping")
+                        log.info(
+                            f"Key {typ}: {str(key)} outside tracked window(s), skipping"
+                        )
                     return
 
                 # Update regions for tracked windows
@@ -916,26 +1025,36 @@ class Screen(Observer):
                     current_time = time.time()
 
                     # Check if this is the start of a new keyboard session
-                    if (self._key_activity_start is None or
-                        current_time - self._key_activity_start > self._key_activity_timeout):
+                    if (
+                        self._key_activity_start is None
+                        or current_time - self._key_activity_start
+                        > self._key_activity_timeout
+                    ):
                         # Start new session - save first screenshot
                         self._key_activity_start = current_time
                         self._key_screenshots = []
 
                         # Save frame
-                        screenshot_path = await self._save_frame(frame, mon, rel_x, rel_y, f"{step}_first")
+                        screenshot_path = await self._save_frame(
+                            frame, mon, rel_x, rel_y, f"{step}_first"
+                        )
                         self._key_screenshots.append(screenshot_path)
-                        log.info(f"Started new keyboard session, saved first screenshot: {screenshot_path}")
+                        log.info(
+                            f"Started new keyboard session, saved first screenshot: {screenshot_path}"
+                        )
                     else:
                         # Continue existing session - save intermediate screenshot
-                        screenshot_path = await self._save_frame(frame, mon, rel_x, rel_y, f"{step}_intermediate")
+                        screenshot_path = await self._save_frame(
+                            frame, mon, rel_x, rel_y, f"{step}_intermediate"
+                        )
                         self._key_screenshots.append(screenshot_path)
-                        log.info(f"Continued keyboard session, saved intermediate screenshot: {screenshot_path}")
+                        log.info(
+                            f"Continued keyboard session, saved intermediate screenshot: {screenshot_path}"
+                        )
 
                     # Schedule cleanup of previous intermediate screenshots
                     if len(self._key_screenshots) > 2:
                         asyncio.create_task(self._cleanup_key_screenshots())
-
 
             # ---- scroll event reception ----
             async def scroll_event(x: float, y: float, dx: float, dy: float):
@@ -950,7 +1069,9 @@ class Screen(Observer):
                 tracked = self._find_region_for_point(x, y)
                 if tracked is None:
                     if self.debug:
-                        log.info(f"Scroll @({x:7.1f},{y:7.1f}) outside tracked window(s), skipping")
+                        log.info(
+                            f"Scroll @({x:7.1f},{y:7.1f}) outside tracked window(s), skipping"
+                        )
                     return
 
                 # Update regions for tracked windows
@@ -971,13 +1092,15 @@ class Screen(Observer):
                     return
 
                 # Only log significant scroll movements
-                scroll_magnitude = (dx**2 + dy**2)**0.5
+                scroll_magnitude = (dx**2 + dy**2) ** 0.5
                 if scroll_magnitude < 1.0:  # Very small scrolls
                     if self.debug:
                         log.info(f"Scroll too small: magnitude={scroll_magnitude:.2f}")
                     return
 
-                log.info(f"Scroll @({rel_x:7.1f},{rel_y:7.1f}) dx={dx:.2f} dy={dy:.2f} → win={idx}")
+                log.info(
+                    f"Scroll @({rel_x:7.1f},{rel_y:7.1f}) dx={dx:.2f} dy={dy:.2f} → win={idx}"
+                )
 
                 if self._skip():
                     return
@@ -985,7 +1108,14 @@ class Screen(Observer):
                 # Update activity timestamp
                 await self._update_activity_time()
 
-                self._pending_event = {"type": "scroll", "position": (rel_x, rel_y), "mon": idx, "before": bf, "scroll": (dx, dy), "monitor_rect": mon}
+                self._pending_event = {
+                    "type": "scroll",
+                    "position": (rel_x, rel_y),
+                    "mon": idx,
+                    "before": bf,
+                    "scroll": (dx, dy),
+                    "monitor_rect": mon,
+                }
 
                 # Process event immediately
                 await flush()
@@ -1000,7 +1130,7 @@ class Screen(Observer):
             async with self._inactivity_lock:
                 self._last_activity_time = time.time()
 
-            while self._running:                         # flag from base class
+            while self._running:  # flag from base class
                 t0 = time.time()
 
                 # Check for inactivity timeout
@@ -1008,9 +1138,13 @@ class Screen(Observer):
                     if self._last_activity_time is not None:
                         inactive_duration = t0 - self._last_activity_time
                         if inactive_duration >= self._inactivity_timeout:
-                            log.info(f"Stopping recording due to {inactive_duration/60:.1f} minutes of inactivity")
+                            log.info(
+                                f"Stopping recording due to {inactive_duration/60:.1f} minutes of inactivity"
+                            )
                             print(f"\n{'='*70}")
-                            print(f"Recording automatically stopped after {inactive_duration/60:.1f} minutes of inactivity")
+                            print(
+                                f"Recording automatically stopped after {inactive_duration/60:.1f} minutes of inactivity"
+                            )
                             print(f"{'='*70}\n")
                             self._running = False
                             break
@@ -1019,7 +1153,9 @@ class Screen(Observer):
                 # We capture frames at event time (not periodic)
                 if self._tracked_windows:
                     await self._update_tracked_regions()
-                    if self.debug and frame_count % 30 == 0:  # Log every 30 frames to avoid spam
+                    if (
+                        self.debug and frame_count % 30 == 0
+                    ):  # Log every 30 frames to avoid spam
                         log.info(f"Updated tracked window regions")
                     frame_count += 1
 
@@ -1034,18 +1170,25 @@ class Screen(Observer):
 
                 # Check for keyboard session timeout
                 current_time = time.time()
-                if (self._key_activity_start is not None and 
-                    current_time - self._key_activity_start > self._key_activity_timeout and
-                    len(self._key_screenshots) > 1):
+                if (
+                    self._key_activity_start is not None
+                    and current_time - self._key_activity_start
+                    > self._key_activity_timeout
+                    and len(self._key_screenshots) > 1
+                ):
                     # Session ended - rename last screenshot to indicate it's the final one
                     async with self._key_activity_lock:
                         if len(self._key_screenshots) > 1:
                             last_path = self._key_screenshots[-1]
                             final_path = last_path.replace("_intermediate", "_final")
                             try:
-                                await self._run_in_thread(os.rename, last_path, final_path)
+                                await self._run_in_thread(
+                                    os.rename, last_path, final_path
+                                )
                                 self._key_screenshots[-1] = final_path
-                                log.info(f"Keyboard session ended, renamed final screenshot: {final_path}")
+                                log.info(
+                                    f"Keyboard session ended, renamed final screenshot: {final_path}"
+                                )
                             except OSError:
                                 pass
                         self._key_activity_start = None
@@ -1058,7 +1201,7 @@ class Screen(Observer):
             # shutdown
             mouse_listener.stop()
             key_listener.stop()
-            
+
             # Final cleanup of any remaining keyboard session
             if self._key_activity_start is not None and len(self._key_screenshots) > 1:
                 async with self._key_activity_lock:
@@ -1066,10 +1209,12 @@ class Screen(Observer):
                     final_path = last_path.replace("_intermediate", "_final")
                     try:
                         await self._run_in_thread(os.rename, last_path, final_path)
-                        log.info(f"Final keyboard session cleanup, renamed: {final_path}")
+                        log.info(
+                            f"Final keyboard session cleanup, renamed: {final_path}"
+                        )
                     except OSError:
                         pass
                     await self._cleanup_key_screenshots()
-            
+
             # if self._debounce_handle:
             #     self._debounce_handle.cancel()
