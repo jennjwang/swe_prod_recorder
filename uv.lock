@@ -873,12 +873,37 @@ wheels = [
 ]
 
 [[package]]
-name = "python-dotenv"
-version = "1.2.1"
+name = "pyqt5"
+version = "5.15.11"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/f0/26/19cadc79a718c5edbec86fd4919a6b6d3f681039a2f6d66d14be94e75fb9/python_dotenv-1.2.1.tar.gz", hash = "sha256:42667e897e16ab0d66954af0e60a9caa94f0fd4ecf3aaf6d2d260eec1aa36ad6", size = 44221, upload-time = "2025-10-26T15:12:10.434Z" }
+dependencies = [
+    { name = "pyqt5-qt5" },
+    { name = "pyqt5-sip" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0e/07/c9ed0bd428df6f87183fca565a79fee19fa7c88c7f00a7f011ab4379e77a/PyQt5-5.15.11.tar.gz", hash = "sha256:fda45743ebb4a27b4b1a51c6d8ef455c4c1b5d610c90d2934c7802b5c1557c52", size = 3216775, upload-time = "2024-07-19T08:39:57.756Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/14/1b/a298b06749107c305e1fe0f814c6c74aea7b2f1e10989cb30f544a1b3253/python_dotenv-1.2.1-py3-none-any.whl", hash = "sha256:b81ee9561e9ca4004139c6cbba3a238c32b03e4894671e181b671e8cb8425d61", size = 21230, upload-time = "2025-10-26T15:12:09.109Z" },
+    { url = "https://files.pythonhosted.org/packages/b4/8c/4065950f9d013c4b2e588fe33cf04e564c2322842d84dbcbce5ba1dc28b0/PyQt5-5.15.11-cp38-abi3-manylinux_2_17_x86_64.whl", hash = "sha256:cd672a6738d1ae33ef7d9efa8e6cb0a1525ecf53ec86da80a9e1b6ec38c8d0f1", size = 8188103, upload-time = "2024-07-19T08:39:40.561Z" },
+]
+
+[[package]]
+name = "pyqt5-qt5"
+version = "5.15.17"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ac/e1/13d25a9ff2ac236a264b4603abaa39fa8bb9a7aa430519bb5f545c5b008d/PyQt5_Qt5-5.15.17-py3-none-manylinux2014_x86_64.whl", hash = "sha256:b018f75d1cc61146396fa5af14da1db77c5d6318030e5e366f09ffdf7bd358d8", size = 61112954, upload-time = "2025-05-24T11:16:26.036Z" },
+]
+
+[[package]]
+name = "pyqt5-sip"
+version = "12.17.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ea/08/88a20c862f40b5c178c517cdc7e93767967dec5ac1b994e226d517991c9b/pyqt5_sip-12.17.1.tar.gz", hash = "sha256:0eab72bcb628f1926bf5b9ac51259d4fa18e8b2a81d199071135458f7d087ea8", size = 104136, upload-time = "2025-10-08T09:04:19.893Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/08/92/5aa38d8c17ee857fc3f7866dc84d4f4e7ab2180b5026e4f6ffd594ed2432/pyqt5_sip-12.17.1-cp310-cp310-manylinux_2_5_x86_64.manylinux1_x86_64.whl", hash = "sha256:b52e85520dbfe5c3d0c0c47aa2c10fc1853d892ae60ebebfe8154b052394da50", size = 271388, upload-time = "2025-10-08T09:15:32.369Z" },
+    { url = "https://files.pythonhosted.org/packages/dc/b2/330f97434b21fbc99ab16f6ce71358ff5ea1bf1f09ed14dfe6b28b5ed8f5/pyqt5_sip-12.17.1-cp311-cp311-manylinux_2_5_x86_64.manylinux1_x86_64.whl", hash = "sha256:155cf755266c8bf64428916e2ff720d5efa1aec003d4ccc40c003b147dbdac03", size = 276844, upload-time = "2025-10-08T09:15:33.713Z" },
+    { url = "https://files.pythonhosted.org/packages/45/85/ea1ae099260fd1859d71b31f51760b4226abfa778d5796b76d92c8fe6dcd/pyqt5_sip-12.17.1-cp312-cp312-manylinux_2_5_x86_64.manylinux1_x86_64.whl", hash = "sha256:140cc582151456103ebb149fefc678f3cae803e7720733db51212af5219cd45c", size = 282182, upload-time = "2025-10-08T09:15:35.752Z" },
+    { url = "https://files.pythonhosted.org/packages/b1/9f/ae691360a9f18e3e06fd297e854d7ad175367e35ea184fd2fcf6c79b8c25/pyqt5_sip-12.17.1-cp313-cp313-manylinux_2_5_x86_64.manylinux1_x86_64.whl", hash = "sha256:b023da906a70af2cf5e6fc1932f441ede07530f3e164dd52c6c2bb5ab7c6f424", size = 281923, upload-time = "2025-10-08T09:15:37.004Z" },
+    { url = "https://files.pythonhosted.org/packages/40/ae/be6e338ea427deac5cd81a93f51ae3fb6505d99d6d5e5d5341bcc099327e/pyqt5_sip-12.17.1-cp314-cp314-manylinux_2_5_x86_64.manylinux1_x86_64.whl", hash = "sha256:944a4bf1e1ee18ad03a54964c1c6433fb6de582313a1f0b17673e7203e22fc83", size = 282291, upload-time = "2025-10-08T08:38:25.735Z" },
 ]
 
 [[package]]
@@ -1302,7 +1327,7 @@ dependencies = [
     { name = "pyobjc-core", marker = "sys_platform == 'darwin'" },
     { name = "pyobjc-framework-cocoa", marker = "sys_platform == 'darwin'" },
     { name = "pyobjc-framework-quartz", marker = "sys_platform == 'darwin'" },
-    { name = "python-dotenv" },
+    { name = "pyqt5", marker = "sys_platform == 'linux'" },
     { name = "scikit-learn" },
     { name = "shapely" },
     { name = "sqlalchemy" },
@@ -1327,7 +1352,7 @@ requires-dist = [
     { name = "pyobjc-core", marker = "sys_platform == 'darwin'" },
     { name = "pyobjc-framework-cocoa", marker = "sys_platform == 'darwin'" },
     { name = "pyobjc-framework-quartz", marker = "sys_platform == 'darwin'" },
-    { name = "python-dotenv", specifier = ">=1.0.0" },
+    { name = "pyqt5", marker = "sys_platform == 'linux'", specifier = ">=5.15.0" },
     { name = "pyyaml", marker = "extra == 'gdrive'" },
     { name = "scikit-learn" },
     { name = "shapely" },

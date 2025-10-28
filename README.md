@@ -169,5 +169,9 @@ recorder/
 
 ## Attribution
 
-This project is built on top of [GUM (General User Models)](https://github.com/GeneralUserModels/gum).
+This project is built on top of [GUM (General User Models)](https://github.com/GeneralUserModels/gum)
+(MIT License) by Omar Shaikh.
 The core observer pattern and database architecture are adapted from that project.
+
+The Linux window manager and graphics integration were vendored from [pyx-sys](https://github.com/lmmx/pyx-sys)
+(MIT License) by Louis Maddox.
