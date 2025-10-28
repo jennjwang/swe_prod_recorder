@@ -6,9 +6,14 @@ from Foundation import NSDate, NSRunLoop
 _selected_regions = []  # List of selected regions
 _selected_window_ids = []  # List of selected window IDs
 
+
 class OverlayWindow(AppKit.NSWindow):
-    def canBecomeKeyWindow(self): return True
-    def canBecomeMainWindow(self): return True
+    def canBecomeKeyWindow(self):
+        return True
+
+    def canBecomeMainWindow(self):
+        return True
+
     def becomeKeyWindow(self):
         result = objc.super(OverlayWindow, self).becomeKeyWindow()
         try:
@@ -19,9 +24,12 @@ class OverlayWindow(AppKit.NSWindow):
             pass
         return result
 
+
 class SelectionView(AppKit.NSView):
     def init(self):
-        self = objc.super(SelectionView, self).initWithFrame_(AppKit.NSMakeRect(0, 0, 10000, 10000))
+        self = objc.super(SelectionView, self).initWithFrame_(
+            AppKit.NSMakeRect(0, 0, 10000, 10000)
+        )
         if self is None:
             return None
         self.start = None
@@ -65,16 +73,22 @@ class SelectionView(AppKit.NSView):
 
         # Enter/Return = confirm selection
         elif keyCode == 36 or keyCode == 76:  # kVK_Return or kVK_KeypadEnter
-            print(f"Enter pressed - selected_windows count: {len(self.selected_windows)}")
+            print(
+                f"Enter pressed - selected_windows count: {len(self.selected_windows)}"
+            )
             if self.selected_windows:
                 # Use the selected windows
                 _selected_regions = [w.copy() for w in self.selected_windows]
-                _selected_window_ids = [w.get("window_id") for w in self.selected_windows]
+                _selected_window_ids = [
+                    w.get("window_id") for w in self.selected_windows
+                ]
                 # Remove window_id from regions as it's stored separately
                 for region in _selected_regions:
                     region.pop("window_id", None)
                 print(f"Confirming selection of {len(self.selected_windows)} window(s)")
-                print(f"Setting global _selected_regions to {len(_selected_regions)} items")
+                print(
+                    f"Setting global _selected_regions to {len(_selected_regions)} items"
+                )
                 self.window().orderOut_(None)
                 AppKit.NSApp().stopModalWithCode_(AppKit.NSModalResponseOK)
             else:
@@ -105,13 +119,19 @@ class SelectionView(AppKit.NSView):
         button_x = self.bounds().size.width - button_width - 20
         button_y = screen_height - banner_height + 10
 
-        if (button_x <= location.x <= button_x + button_width and
-            button_y <= location.y <= button_y + button_height):
+        if (
+            button_x <= location.x <= button_x + button_width
+            and button_y <= location.y <= button_y + button_height
+        ):
             # Clicked DONE button
             if self.selected_windows:
-                print(f"✓ DONE button clicked - confirming {len(self.selected_windows)} window(s)")
+                print(
+                    f"✓ DONE button clicked - confirming {len(self.selected_windows)} window(s)"
+                )
                 _selected_regions = [w.copy() for w in self.selected_windows]
-                _selected_window_ids = [w.get("window_id") for w in self.selected_windows]
+                _selected_window_ids = [
+                    w.get("window_id") for w in self.selected_windows
+                ]
                 for region in _selected_regions:
                     region.pop("window_id", None)
                 self.window().orderOut_(None)
@@ -124,9 +144,13 @@ class SelectionView(AppKit.NSView):
         # Double-click on empty area to confirm selection (backup method)
         if event.clickCount() == 2 and window_info is None and not self.start:
             if self.selected_windows:
-                print(f"Double-click detected - confirming selection of {len(self.selected_windows)} window(s)")
+                print(
+                    f"Double-click detected - confirming selection of {len(self.selected_windows)} window(s)"
+                )
                 _selected_regions = [w.copy() for w in self.selected_windows]
-                _selected_window_ids = [w.get("window_id") for w in self.selected_windows]
+                _selected_window_ids = [
+                    w.get("window_id") for w in self.selected_windows
+                ]
                 for region in _selected_regions:
                     region.pop("window_id", None)
                 self.window().orderOut_(None)
@@ -140,14 +164,18 @@ class SelectionView(AppKit.NSView):
             for i, w in enumerate(self.selected_windows):
                 if w.get("window_id") == window_id:
                     self.selected_windows.pop(i)
-                    print(f"✗ Removed window from selection (total: {len(self.selected_windows)})")
+                    print(
+                        f"✗ Removed window from selection (total: {len(self.selected_windows)})"
+                    )
                     already_selected = True
                     break
 
             if not already_selected and window_id:
                 # Add window to selection
                 self.selected_windows.append(window_info.copy())
-                print(f"✓ Added window to selection (total: {len(self.selected_windows)})")
+                print(
+                    f"✓ Added window to selection (total: {len(self.selected_windows)})"
+                )
                 print("  → Click DONE button or double-click empty area")
 
             self.highlighted_window = None
@@ -179,7 +207,12 @@ class SelectionView(AppKit.NSView):
         top = screen.size.height - top - height  # Flip Y
 
         # Add manual region to selection (no window_id for manual regions)
-        manual_region = {"left": int(left), "top": int(top), "width": int(width), "height": int(height)}
+        manual_region = {
+            "left": int(left),
+            "top": int(top),
+            "width": int(width),
+            "height": int(height),
+        }
         self.selected_windows.append(manual_region)
         print(f"Added manual region to selection (total: {len(self.selected_windows)})")
 
@@ -190,11 +223,14 @@ class SelectionView(AppKit.NSView):
 
     def _get_window_at_location(self, location):
         window_frame = self.window().frame()
-        screen_point = AppKit.NSMakePoint(window_frame.origin.x + location.x, window_frame.origin.y + location.y)
+        screen_point = AppKit.NSMakePoint(
+            window_frame.origin.x + location.x, window_frame.origin.y + location.y
+        )
 
         window_list = Quartz.CGWindowListCopyWindowInfo(
-            Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
-            Quartz.kCGNullWindowID
+            Quartz.kCGWindowListOptionOnScreenOnly
+            | Quartz.kCGWindowListExcludeDesktopElements,
+            Quartz.kCGNullWindowID,
         )
         if not window_list:
             return None
@@ -207,22 +243,38 @@ class SelectionView(AppKit.NSView):
         quartz_y = max_y - screen_point.y
 
         for win in window_list:
-            bounds = win.get('kCGWindowBounds', {})
+            bounds = win.get("kCGWindowBounds", {})
             if not bounds:
                 continue
-            x, y, w, h = bounds.get('X', 0), bounds.get('Y', 0), bounds.get('Width', 0), bounds.get('Height', 0)
-            layer = win.get('kCGWindowLayer', 0)
+            x, y, w, h = (
+                bounds.get("X", 0),
+                bounds.get("Y", 0),
+                bounds.get("Width", 0),
+                bounds.get("Height", 0),
+            )
+            layer = win.get("kCGWindowLayer", 0)
             if layer >= AppKit.NSFloatingWindowLevel or w < 50 or h < 50:
                 continue
             if x <= screen_point.x <= x + w and y <= quartz_y <= y + h:
-                window_id = win.get('kCGWindowNumber')
-                return {"left": int(x), "top": int(y), "width": int(w), "height": int(h), "window_id": window_id}
+                window_id = win.get("kCGWindowNumber")
+                return {
+                    "left": int(x),
+                    "top": int(y),
+                    "width": int(w),
+                    "height": int(h),
+                    "window_id": window_id,
+                }
         return None
 
     def drawRect_(self, _):
         # Draw instruction banner at top
         banner_height = 60
-        banner_rect = AppKit.NSMakeRect(0, self.bounds().size.height - banner_height, self.bounds().size.width, banner_height)
+        banner_rect = AppKit.NSMakeRect(
+            0,
+            self.bounds().size.height - banner_height,
+            self.bounds().size.width,
+            banner_height,
+        )
         AppKit.NSColor.colorWithCalibratedWhite_alpha_(0, 0.8).set()
         AppKit.NSBezierPath.fillRect_(banner_rect)
 
@@ -233,11 +285,15 @@ class SelectionView(AppKit.NSView):
         button_y = self.bounds().size.height - banner_height + 10
 
         button_rect = AppKit.NSMakeRect(button_x, button_y, button_width, button_height)
-        button_path = AppKit.NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(button_rect, 8, 8)
+        button_path = AppKit.NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+            button_rect, 8, 8
+        )
 
         if self.selected_windows:
             # Enabled - green
-            AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.2, 0.8, 0.3, 0.9).setFill()
+            AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                0.2, 0.8, 0.3, 0.9
+            ).setFill()
         else:
             # Disabled - gray
             AppKit.NSColor.colorWithCalibratedWhite_alpha_(0.5, 0.5).setFill()
@@ -256,7 +312,9 @@ class SelectionView(AppKit.NSView):
         done_size = done_text.sizeWithAttributes_(done_attrs)
         done_x = button_x + (button_width - done_size.width) / 2
         done_y = button_y + (button_height - done_size.height) / 2
-        done_text.drawAtPoint_withAttributes_(AppKit.NSMakePoint(done_x, done_y), done_attrs)
+        done_text.drawAtPoint_withAttributes_(
+            AppKit.NSMakePoint(done_x, done_y), done_attrs
+        )
 
         # Draw instruction text
         text_str = "Click windows to toggle selection  •  Click again to deselect"
@@ -267,7 +325,11 @@ class SelectionView(AppKit.NSView):
         }
         text_size = text.sizeWithAttributes_(attrs)
         text_x = 20  # Left-aligned
-        text_y = self.bounds().size.height - banner_height + (banner_height - text_size.height) / 2
+        text_y = (
+            self.bounds().size.height
+            - banner_height
+            + (banner_height - text_size.height) / 2
+        )
         text.drawAtPoint_withAttributes_(AppKit.NSMakePoint(text_x, text_y), attrs)
 
         # Calculate max_y once for coordinate conversions
@@ -284,9 +346,13 @@ class SelectionView(AppKit.NSView):
             rect = AppKit.NSMakeRect(view_x, view_y, win["width"], win["height"])
 
             path = AppKit.NSBezierPath.bezierPathWithRect_(rect)
-            AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.2, 0.8, 0.3, 0.3).setFill()
+            AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                0.2, 0.8, 0.3, 0.3
+            ).setFill()
             path.fill()
-            AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.2, 0.8, 0.3, 0.9).setStroke()
+            AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                0.2, 0.8, 0.3, 0.9
+            ).setStroke()
             path.setLineWidth_(4.0)
             path.stroke()
 
@@ -304,12 +370,18 @@ class SelectionView(AppKit.NSView):
             # Draw badge background circle
             badge_radius = 20
             badge_circle = AppKit.NSBezierPath.bezierPathWithOvalInRect_(
-                AppKit.NSMakeRect(badge_x - 5, badge_y - 5, badge_radius * 2, badge_radius * 2)
+                AppKit.NSMakeRect(
+                    badge_x - 5, badge_y - 5, badge_radius * 2, badge_radius * 2
+                )
             )
-            AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.2, 0.8, 0.3, 0.9).setFill()
+            AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                0.2, 0.8, 0.3, 0.9
+            ).setFill()
             badge_circle.fill()
 
-            badge_text.drawAtPoint_withAttributes_(AppKit.NSMakePoint(badge_x + 5, badge_y), badge_attrs)
+            badge_text.drawAtPoint_withAttributes_(
+                AppKit.NSMakePoint(badge_x + 5, badge_y), badge_attrs
+            )
 
         # Draw highlighted window in blue (only if not dragging)
         if self.highlighted_window and not self.start:
@@ -319,9 +391,13 @@ class SelectionView(AppKit.NSView):
             rect = AppKit.NSMakeRect(view_x, view_y, win["width"], win["height"])
 
             path = AppKit.NSBezierPath.bezierPathWithRect_(rect)
-            AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.3, 0.6, 1.0, 0.25).setFill()
+            AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                0.3, 0.6, 1.0, 0.25
+            ).setFill()
             path.fill()
-            AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.3, 0.6, 1.0, 0.9).setStroke()
+            AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                0.3, 0.6, 1.0, 0.9
+            ).setStroke()
             path.setLineWidth_(3.0)
             path.stroke()
 
@@ -334,11 +410,16 @@ class SelectionView(AppKit.NSView):
                 abs(self.end.y - self.start.y),
             )
             path = AppKit.NSBezierPath.bezierPathWithRect_(rect)
-            AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(1, 0, 0, 0.3).setFill()
+            AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                1, 0, 0, 0.3
+            ).setFill()
             path.fill()
-            AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(1, 0, 0, 0.9).setStroke()
+            AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                1, 0, 0, 0.9
+            ).setStroke()
             path.setLineWidth_(2.0)
             path.stroke()
+
 
 def select_region_with_mouse() -> tuple[list[dict], list[int | None]]:
     """Modal overlay for selecting multiple windows or dragging rectangles.
@@ -355,7 +436,9 @@ def select_region_with_mouse() -> tuple[list[dict], list[int | None]]:
 
     app = AppKit.NSApplication.sharedApplication()
     rect = AppKit.NSScreen.mainScreen().frame()
-    content_rect = AppKit.NSMakeRect(rect.origin.x, rect.origin.y, rect.size.width, rect.size.height)
+    content_rect = AppKit.NSMakeRect(
+        rect.origin.x, rect.origin.y, rect.size.width, rect.size.height
+    )
 
     window = OverlayWindow.alloc().initWithContentRect_styleMask_backing_defer_(
         content_rect,
@@ -396,18 +479,20 @@ def select_region_with_mouse() -> tuple[list[dict], list[int | None]]:
     window.makeFirstResponder_(view)
     window.setInitialFirstResponder_(view)
 
-    print("\n" + "="*70)
+    print("\n" + "=" * 70)
     print("WINDOW SELECTION OVERLAY")
-    print("="*70)
+    print("=" * 70)
     print("1. Click on windows to SELECT them (they turn GREEN)")
     print("2. Click selected windows again to DESELECT them")
     print("3. Click the green DONE button at top-right to confirm")
-    print("="*70 + "\n")
+    print("=" * 70 + "\n")
 
     AppKit.NSCursor.crosshairCursor().push()
     response = None
     try:
-        response = app.runModalForWindow_(window)  # blocks until stopModalWithCode_ called
+        response = app.runModalForWindow_(
+            window
+        )  # blocks until stopModalWithCode_ called
         print(f"Modal exited with response: {response}")
     finally:
         # Always restore cursor
@@ -422,7 +507,9 @@ def select_region_with_mouse() -> tuple[list[dict], list[int | None]]:
         app.updateWindows()
 
         # Give AppKit a tick to process the close
-        NSRunLoop.currentRunLoop().runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(0.05))
+        NSRunLoop.currentRunLoop().runUntilDate_(
+            NSDate.dateWithTimeIntervalSinceNow_(0.05)
+        )
 
     # Debug: print response and selected regions
     print(f"Response code: {response}")

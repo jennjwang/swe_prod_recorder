@@ -1,20 +1,19 @@
-# db_utils.py
 from __future__ import annotations
 
 import math
-from datetime import datetime, timezone
 import re
+from datetime import datetime, timezone
 from typing import List
 
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-
 from sqlalchemy import MetaData, Table, literal_column, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from .models import Observation, Proposition, proposition_parent 
+from .models import Observation, Proposition, proposition_parent
+
 
 def build_fts_query(raw: str, mode: str = "OR") -> str:
     tokens = re.findall(r"\w+", raw.lower())
@@ -24,8 +23,9 @@ def build_fts_query(raw: str, mode: str = "OR") -> str:
         return f'"{" ".join(tokens)}"'
     elif mode == "OR":
         return " OR ".join(tokens)
-    else:                              # implicit AND
+    else:  # implicit AND
         return " ".join(tokens)
+
 
 def _has_child_subquery() -> select:
     return (
@@ -35,9 +35,11 @@ def _has_child_subquery() -> select:
         .exists()
     )
 
+
 # constants
-K_DECAY = 2.0     # decay rate for recency adjustment
-LAMBDA = 0.5      # trade-off for MMR
+K_DECAY = 2.0  # decay rate for recency adjustment
+LAMBDA = 0.5  # trade-off for MMR
+
 
 async def search_propositions_bm25(
     session: AsyncSession,
@@ -48,7 +50,7 @@ async def search_propositions_bm25(
     start_time: datetime | None = None,
     end_time: datetime | None = None,
 ) -> list[tuple[Proposition, float]]:
-    """    
+    """
     Args:
         session: AsyncSession for database operations
         user_query: Search query string
@@ -63,8 +65,8 @@ async def search_propositions_bm25(
 
     candidate_pool = max(limit * 10, limit)
 
-    fts       = Table("propositions_fts", MetaData())
-    bm25_col  = literal_column("bm25(propositions_fts)").label("bm25")
+    fts = Table("propositions_fts", MetaData())
+    bm25_col = literal_column("bm25(propositions_fts)").label("bm25")
     join_cond = literal_column("propositions_fts.rowid") == Proposition.id
     has_child = _has_child_subquery()
 
@@ -104,7 +106,6 @@ async def search_propositions_bm25(
     now = datetime.now(timezone.utc)
     rel_scores: List[float] = []
     for prop, raw_score in rows:
-
         dt = prop.created_at
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
@@ -122,7 +123,7 @@ async def search_propositions_bm25(
 
     # MMR selection
     selected_idxs: List[int] = []
-    final_scores:  List[float] = []
+    final_scores: List[float] = []
 
     while len(selected_idxs) < min(limit, len(rows)):
         if not selected_idxs:
@@ -132,9 +133,8 @@ async def search_propositions_bm25(
             continue
 
         sims = cosine_similarity(vecs, vecs[selected_idxs]).max(axis=1)
-        mmr_scores = (LAMBDA * np.array(rel_scores)
-                      - (1 - LAMBDA) * sims)
-        
+        mmr_scores = LAMBDA * np.array(rel_scores) - (1 - LAMBDA) * sims
+
         # never pick twice
         mmr_scores[selected_idxs] = -np.inf
 
@@ -142,8 +142,8 @@ async def search_propositions_bm25(
         selected_idxs.append(idx)
         final_scores.append(float(mmr_scores[idx]))
 
-    return [(rows[i][0], final_scores[pos])
-            for pos, i in enumerate(selected_idxs)]
+    return [(rows[i][0], final_scores[pos]) for pos, i in enumerate(selected_idxs)]
+
 
 async def get_related_observations(
     session: AsyncSession,
@@ -151,7 +151,6 @@ async def get_related_observations(
     *,  # Force keyword arguments for optional parameters
     limit: int = 5,
 ) -> List[Observation]:
-
     stmt = (
         select(Observation)
         .join(Observation.propositions)

@@ -9,6 +9,7 @@ from .models import Observation, init_db
 from .observers import Observer
 from .schemas import Update
 
+
 class gum:
     def __init__(
         self,
@@ -32,12 +33,14 @@ class gum:
         self.logger.setLevel(verbosity)
         if not self.logger.handlers:
             h = logging.StreamHandler()
-            h.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+            h.setFormatter(
+                logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+            )
             self.logger.addHandler(h)
 
         self.engine = None
         self.Session = None
-        self._db_name        = db_name
+        self._db_name = db_name
         self._data_directory = data_directory
 
         self._update_sem = asyncio.Semaphore(max_concurrent_updates)
@@ -86,7 +89,6 @@ class gum:
         dispatch it through the semaphore-guarded handler.
         """
         while True:
-
             gets = {
                 asyncio.create_task(obs.update_queue.get()): obs
                 for obs in self.observers

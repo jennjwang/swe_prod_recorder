@@ -1,10 +1,11 @@
 from __future__ import annotations
+
+import asyncio
 from abc import ABC, abstractmethod
 from typing import Optional
-import asyncio
+
 
 class Observer(ABC):
-
     def __init__(self, name: Optional[str] = None) -> None:
         self.update_queue = asyncio.Queue()
         self._name = name or self.__class__.__name__
@@ -15,7 +16,7 @@ class Observer(ABC):
 
     # ─────────────────────────────── abstract worker
     @abstractmethod
-    async def _worker(self) -> None:     # subclasses override
+    async def _worker(self) -> None:  # subclasses override
         pass
 
     # wrapper plugs running flag + exception handling

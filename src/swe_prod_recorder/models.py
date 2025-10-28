@@ -1,4 +1,3 @@
-# models.py
 from __future__ import annotations
 
 import pathlib
@@ -12,8 +11,8 @@ from sqlalchemy import (
     String,
     Table,
     Text,
-    text as sql_text,
 )
+from sqlalchemy import text as sql_text
 from sqlalchemy.ext.asyncio import (
     AsyncAttrs,
     AsyncEngine,
@@ -28,8 +27,10 @@ from sqlalchemy.orm import (
 )
 from sqlalchemy.sql import func
 
+
 class Base(AsyncAttrs, DeclarativeBase):
     pass
+
 
 observation_proposition = Table(
     "observation_proposition",
@@ -69,15 +70,15 @@ proposition_parent = Table(
 class Observation(Base):
     __tablename__ = "observations"
 
-    id:            Mapped[int]   = mapped_column(primary_key=True)
-    observer_name: Mapped[str]   = mapped_column(String(100), nullable=False)
-    content:       Mapped[str]   = mapped_column(Text,        nullable=False)
-    content_type:  Mapped[str]   = mapped_column(String(50),  nullable=False)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    observer_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    content_type: Mapped[str] = mapped_column(String(50), nullable=False)
 
-    created_at:    Mapped[str]   = mapped_column(
+    created_at: Mapped[str] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    updated_at:    Mapped[str]   = mapped_column(
+    updated_at: Mapped[str] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
@@ -100,24 +101,24 @@ class Observation(Base):
 class Proposition(Base):
     __tablename__ = "propositions"
 
-    id:         Mapped[int]           = mapped_column(primary_key=True)
-    text:       Mapped[str]           = mapped_column(Text, nullable=False)
-    reasoning:  Mapped[str]           = mapped_column(Text, nullable=False)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    reasoning: Mapped[str] = mapped_column(Text, nullable=False)
     confidence: Mapped[Optional[int]]
-    decay:      Mapped[Optional[int]]
+    decay: Mapped[Optional[int]]
 
-    created_at: Mapped[str]           = mapped_column(
+    created_at: Mapped[str] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    updated_at: Mapped[str]           = mapped_column(
+    updated_at: Mapped[str] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
         nullable=False,
     )
 
-    revision_group: Mapped[str]       = mapped_column(String(36), nullable=False, index=True)
-    version:        Mapped[int]       = mapped_column(Integer, server_default="1", nullable=False)
+    revision_group: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    version: Mapped[int] = mapped_column(Integer, server_default="1", nullable=False)
 
     parents: Mapped[set["Proposition"]] = relationship(
         "Proposition",
@@ -144,6 +145,7 @@ class Proposition(Base):
 
 
 FTS_TOKENIZER = "porter ascii"
+
 
 def create_fts_table(conn) -> None:
     """Create FTS5 virtual table + triggers on first run."""
@@ -213,6 +215,7 @@ def create_fts_table(conn) -> None:
         )
     )
 
+
 async def init_db(
     db_path: str = "gum.db",
     db_directory: Optional[str] = None,
@@ -240,9 +243,5 @@ async def init_db(
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(create_fts_table)
 
-    Session = async_sessionmaker(
-        engine, 
-        expire_on_commit=False,
-        autoflush=False
-    )
+    Session = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
     return engine, Session

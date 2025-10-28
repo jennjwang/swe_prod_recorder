@@ -8,4 +8,4 @@ __version__ = "0.1.0"
 
 from .gum import gum
 
-__all__ = ["gum"] 
+__all__ = ["gum"]

@@ -1139,13 +1139,13 @@ class Screen(Observer):
                         inactive_duration = t0 - self._last_activity_time
                         if inactive_duration >= self._inactivity_timeout:
                             log.info(
-                                f"Stopping recording due to {inactive_duration/60:.1f} minutes of inactivity"
+                                f"Stopping recording due to {inactive_duration / 60:.1f} minutes of inactivity"
                             )
-                            print(f"\n{'='*70}")
+                            print(f"\n{'=' * 70}")
                             print(
-                                f"Recording automatically stopped after {inactive_duration/60:.1f} minutes of inactivity"
+                                f"Recording automatically stopped after {inactive_duration / 60:.1f} minutes of inactivity"
                             )
-                            print(f"{'='*70}\n")
+                            print(f"{'=' * 70}\n")
                             self._running = False
                             break
 
