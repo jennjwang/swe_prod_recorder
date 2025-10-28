@@ -29,14 +29,7 @@ from shapely.ops import unary_union
 
 from ..schemas import Update
 from .observer import Observer
-
-try:
-    from .window import select_region_with_mouse
-except ImportError:
-    # TODO: add Linux implementation of mouse selection
-    USE_OSX_MOUSE_SELECT = False
-else:
-    USE_OSX_MOUSE_SELECT = True
+from .window import select_region_with_mouse
 
 # from openai import AsyncOpenAI
 # client = AsyncOpenAI()
