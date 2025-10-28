@@ -42,7 +42,7 @@ gdrive = [
 ]
 
 [project.scripts]
-swe-prod-recorder = "gum.cli:main"
+swe-prod-recorder = "swe_prod_recorder.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/jennjwang/swe_prod_recorder"

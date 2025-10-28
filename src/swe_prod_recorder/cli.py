@@ -6,7 +6,7 @@ import argparse
 import asyncio
 
 from .gum import gum
-from .gum.observers import Screen
+from .observers import Screen
 
 
 def parse_args():
