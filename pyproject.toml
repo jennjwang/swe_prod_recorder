@@ -27,18 +27,14 @@ dependencies = [
   # Search and analysis
   "scikit-learn",
   "numpy",
+  # Optional: macOS-specific dependencies
+  "pyobjc-core; sys_platform == 'darwin'",
+  "pyobjc-framework-Quartz; sys_platform == 'darwin'",
+  "pyobjc-framework-Cocoa; sys_platform == 'darwin'",
+  # Optional: Linux-specific dependencies (will go here)
 ]
 
 [project.optional-dependencies]
-macos = [
-  # Optional: macOS-specific dependencies
-  "pyobjc-core",
-  "pyobjc-framework-Quartz",
-  "pyobjc-framework-AppKit",
-]
-linux = [
-  # Optional: Linux-specific dependencies (will go here)
-]
 gdrive = [
   # Optional: Google Drive integration
   "PyDrive",
@@ -51,12 +47,3 @@ swe-prod-recorder = "gum.cli:main"
 [project.urls]
 Homepage = "https://github.com/jennjwang/swe_prod_recorder"
 Repository = "https://github.com/jennjwang/swe_prod_recorder"
-
-[tool.pdm]
-distribution = true
-
-[dependency-groups]
-dev = []
-
-[tool.uv]
-default-groups = ["dev"]
