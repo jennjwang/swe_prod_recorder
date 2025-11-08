@@ -427,8 +427,29 @@ class SelectionView(AppKit.NSView):
             max_y = max(max_y, f.origin.y + f.size.height)
         window_frame = self.window().frame()
 
-        # Draw selected windows in green
+        # Draw selected windows in green - only if visible on current Space
         for idx, win in enumerate(self.selected_windows, 1):
+            # Check if this window is visible on the current Space
+            win_id = win.get("window_id")
+            if win_id is not None:
+                # Query if window is currently on-screen
+                window_list = Quartz.CGWindowListCopyWindowInfo(
+                    Quartz.kCGWindowListOptionOnScreenOnly,
+                    Quartz.kCGNullWindowID,
+                )
+                window_visible = False
+                if window_list:
+                    for w in window_list:
+                        if w.get("kCGWindowNumber") == win_id:
+                            is_onscreen = w.get("kCGWindowIsOnscreen", False)
+                            if is_onscreen:
+                                window_visible = True
+                            break
+
+                # Skip if window not visible on current Space
+                if not window_visible:
+                    continue
+
             view_x = win["left"] - window_frame.origin.x
             view_y = (max_y - win["top"] - win["height"]) - window_frame.origin.y
             rect = AppKit.NSMakeRect(view_x, view_y, win["width"], win["height"])

@@ -536,6 +536,9 @@ class Screen(Observer):
         Returns the tracked window dict {"id": ..., "region": ...} or None if not found.
         """
         for tracked in self._tracked_windows:
+            # Skip windows that have been closed (region is None)
+            if tracked["region"] is None:
+                continue
             if self._is_point_in_region(x, y, tracked["region"]):
                 return tracked
         return None
