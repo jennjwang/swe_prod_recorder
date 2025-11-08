@@ -500,9 +500,8 @@ class Screen(Observer):
                 if (
                     tracked["id"] is not None
                 ):  # Only update tracked windows (not fixed regions)
-                    new_region = await self._run_in_thread(
-                        _get_window_bounds_by_id, tracked["id"]
-                    )
+                    # Quartz APIs must run on the main thread; call directly.
+                    new_region = _get_window_bounds_by_id(tracked["id"])
                     if new_region:
                         old_region = tracked["region"]
                         tracked["region"] = new_region
