@@ -34,7 +34,7 @@ The project pairs a command-line facilitator (`cli.py`) with an asynchronous obs
 Install them into a virtual environment with [uv](https://docs.astral.sh/uv/#installation) venv **(recommended)**:
 
 ```bash
-uv venv
+uv venv --python 3.11
 source .venv/bin/activate
 uv sync
 ```
@@ -42,9 +42,9 @@ uv sync
 or using a Python standard library venv virtual environment:
 
 ```bash
-python3 -m venv .venv
+python3.11 -m venv .venv
 source .venv/bin/activate
-pip install -r pyproject.toml
+pip install -e .
 ```
 
 ### Google Drive upload (optional)
