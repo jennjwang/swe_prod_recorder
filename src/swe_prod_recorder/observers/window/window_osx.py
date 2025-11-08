@@ -328,6 +328,13 @@ class SelectionView(AppKit.NSView):
             max_y = max(max_y, f.origin.y + f.size.height)
         quartz_y = max_y - screen_point.y
 
+        # Get screen dimensions for filtering
+        screens = AppKit.NSScreen.screens()
+        max_screen_width = max(scr.frame().size.width for scr in screens) if screens else 3840
+        max_screen_height = max(scr.frame().size.height for scr in screens) if screens else 2160
+
+        # Find all matching windows and prefer the largest
+        matching_windows = []
         for win in window_list:
             bounds = win.get("kCGWindowBounds", {})
             if not bounds:
@@ -339,17 +346,39 @@ class SelectionView(AppKit.NSView):
                 bounds.get("Height", 0),
             )
             layer = win.get("kCGWindowLayer", 0)
-            if layer >= AppKit.NSFloatingWindowLevel or w < 50 or h < 50:
+            owner_name = win.get("kCGWindowOwnerName", "")
+
+            # Filter out system windows
+            excluded_owners = {"Dock", "WindowServer", "Window Manager", "Desktop", "Wallpaper"}
+            if owner_name in excluded_owners:
                 continue
+
+            # Filter out floating windows and very small windows
+            if layer >= AppKit.NSFloatingWindowLevel or w < 200 or h < 150:
+                continue
+
+            # Filter out screen-sized windows (desktop containers)
+            # Allow full-screen apps only if they have a legitimate app owner
+            if w >= max_screen_width or h >= max_screen_height:
+                if not owner_name or owner_name in {"Window Server", "Window Manager", "Finder"}:
+                    continue
+
             if x <= screen_point.x <= x + w and y <= quartz_y <= y + h:
                 window_id = win.get("kCGWindowNumber")
-                return {
+                matching_windows.append({
                     "left": int(x),
                     "top": int(y),
                     "width": int(w),
                     "height": int(h),
                     "window_id": window_id,
-                }
+                    "area": w * h,
+                })
+
+        # Return the largest matching window to avoid sub-panels
+        if matching_windows:
+            largest = max(matching_windows, key=lambda w: w["area"])
+            largest.pop("area")
+            return largest
         return None
 
     def drawRect_(self, _):
