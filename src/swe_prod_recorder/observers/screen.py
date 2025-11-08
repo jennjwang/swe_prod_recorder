@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import gc
 import logging
 import os
+import threading
 import time
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from functools import partial
 from importlib.resources import files as get_package_file
 from typing import Any, Dict, Iterable, List, Optional
@@ -23,7 +25,7 @@ except ImportError:
     USE_GDRIVE = False
 else:
     USE_GDRIVE = True
-from pynput import keyboard, mouse  # still synchronous
+# NOTE: pynput import moved to _worker() method to allow main thread patch to be applied first
 from shapely.geometry import box
 from shapely.ops import unary_union
 
@@ -554,6 +556,63 @@ class Screen(Observer):
             self._thread_pool, lambda: func(*args, **kwargs)
         )
 
+    def _ensure_pynput_main_thread_patch(
+        self, loop: asyncio.AbstractEventLoop
+    ) -> None:
+        """Ensure pynput's TIS access runs on the main thread.
+
+        macOS 15 enforces HIToolbox (TIS) calls on the main dispatch queue.
+        pynput spins a worker thread that fetches keyboard layout info via
+        ctypes, which triggers a SIGTRAP unless the call is rerouted onto
+        the main loop.  We monkeypatch the context manager pynput uses so the
+        heavy lifting happens on the asyncio loop's thread.
+        """
+        try:
+            from pynput._util import darwin as pynput_darwin
+        except ImportError:
+            return
+
+        if getattr(pynput_darwin, "_swe_main_thread_patch", False):
+            return
+
+        original_ctx = pynput_darwin.keycode_context
+
+        @contextlib.contextmanager
+        def keycode_context_main_thread():
+            if threading.current_thread() is threading.main_thread():
+                with original_ctx() as ctx:
+                    yield ctx
+                return
+
+            enter_future: Future = Future()
+            exit_event = threading.Event()
+
+            def enter():
+                try:
+                    cm = original_ctx()
+                    ctx = cm.__enter__()
+                    enter_future.set_result((cm, ctx))
+                except Exception as exc:  # pragma: no cover - defensive
+                    enter_future.set_exception(exc)
+
+            loop.call_soon_threadsafe(enter)
+            cm, ctx = enter_future.result()
+
+            try:
+                yield ctx
+            finally:
+                def exit_ctx():
+                    try:
+                        cm.__exit__(None, None, None)
+                    finally:
+                        exit_event.set()
+
+                loop.call_soon_threadsafe(exit_ctx)
+                exit_event.wait()
+
+        pynput_darwin.keycode_context = keycode_context_main_thread
+        pynput_darwin._swe_main_thread_patch = True
+
     def _detect_high_dpi(self) -> bool:
         """Detect if running on a high-DPI display and adjust settings."""
         try:
@@ -819,6 +878,11 @@ class Screen(Observer):
         DEBOUNCE = self._DEBOUNCE_SEC
 
         loop = asyncio.get_running_loop()
+        self._ensure_pynput_main_thread_patch(loop)
+
+        # Import pynput AFTER the main thread patch is applied
+        # to prevent HIToolbox crashes on macOS 15
+        from pynput import keyboard, mouse
 
         key_event_count = 0
 
