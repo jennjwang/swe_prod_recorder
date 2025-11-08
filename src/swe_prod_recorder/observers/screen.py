@@ -249,6 +249,54 @@ def _get_window_by_name(window_name: str) -> Optional[tuple[int, dict]]:
     return None
 
 
+def _get_monitor_for_region(x: int, y: int, w: int, h: int, allow_transition: bool = False) -> Optional[dict]:
+    """Find which monitor contains most of a region.
+
+    Args:
+        x, y, w, h: Region bounds
+        allow_transition: If True, allow regions that span monitors (for transitions)
+
+    Returns the monitor bounds or None if the region spans multiple monitors significantly.
+    """
+    import Quartz
+
+    err, ids, cnt = Quartz.CGGetActiveDisplayList(16, None, None)
+    if err != Quartz.kCGErrorSuccess:
+        return None
+
+    best_overlap = 0
+    best_monitor = None
+    region_area = w * h
+
+    for did in ids[:cnt]:
+        bounds = Quartz.CGDisplayBounds(did)
+        mon_x = int(bounds.origin.x)
+        mon_y = int(bounds.origin.y)
+        mon_w = int(bounds.size.width)
+        mon_h = int(bounds.size.height)
+
+        # Calculate overlap
+        overlap_x1 = max(x, mon_x)
+        overlap_y1 = max(y, mon_y)
+        overlap_x2 = min(x + w, mon_x + mon_w)
+        overlap_y2 = min(y + h, mon_y + mon_h)
+
+        if overlap_x2 > overlap_x1 and overlap_y2 > overlap_y1:
+            overlap_area = (overlap_x2 - overlap_x1) * (overlap_y2 - overlap_y1)
+            if overlap_area > best_overlap:
+                best_overlap = overlap_area
+                best_monitor = {"left": mon_x, "top": mon_y, "width": mon_w, "height": mon_h}
+
+    # If less than 90% of the region is on the best monitor, it spans multiple monitors
+    if best_monitor and best_overlap < (region_area * 0.9):
+        if allow_transition:
+            # During transitions, capture from the monitor with most overlap
+            return best_monitor
+        return None  # Spans multiple monitors
+
+    return best_monitor
+
+
 def _get_window_bounds_by_id(window_id: int) -> Optional[dict]:
     """Get window bounds by window ID.
 
@@ -272,7 +320,26 @@ def _get_window_bounds_by_id(window_id: int) -> Optional[dict]:
             y = int(bounds.get("Y", 0))
             w = int(bounds.get("Width", 0))
             h = int(bounds.get("Height", 0))
+
+            # Check if window is actually visible (not minimized/hidden)
+            layer = info.get("kCGWindowLayer", 0)
+            alpha = info.get("kCGWindowAlpha", 1.0)
+            is_on_screen = info.get("kCGWindowIsOnscreen", False)
+
+            # Skip if window is not properly visible
+            if layer < 0 or alpha < 0.1 or not is_on_screen:
+                return None
+
             if w > 0 and h > 0:
+                # Check if window spans multiple monitors
+                # Use allow_transition=True to continue capturing during window moves
+                monitor = _get_monitor_for_region(x, y, w, h, allow_transition=True)
+                if monitor is None:
+                    logging.getLogger("Screen").warning(
+                        f"Window (ID: {window_id}) not found on any monitor"
+                    )
+                    return None
+
                 # Flip Y coordinate from Quartz bottom-left to top-left
                 # top = int(gmax_y - y - h)
                 top = y
@@ -345,7 +412,7 @@ class Screen(Observer):
     _MON_START: int = 1  # first real display in mss
     _MEMORY_CLEANUP_INTERVAL: int = 10  # More frequent GC to prevent memory buildup
     _MAX_WORKERS: int = 4  # Limit thread pool size to prevent exhaustion
-    _MAX_SCREENSHOT_AGE: int = 3600  # Delete screenshots older than 1 hour (in seconds)
+    _MAX_SCREENSHOT_AGE: int = None  # Disable automatic screenshot deletion
 
     # Scroll filtering constants
     _SCROLL_DEBOUNCE_SEC: float = 0.8  # Minimum time between scroll events
@@ -518,10 +585,20 @@ class Screen(Observer):
                                     f"Window (ID: {tracked['id']}) moved/resized: {new_region}"
                                 )
                     else:
-                        if self.debug:
+                        # Window not found (closed, minimized, or moved to different Space)
+                        if tracked["region"] is not None:  # Only log once
                             logging.getLogger("Screen").warning(
-                                f"Tracked window (ID: {tracked['id']}) not found"
+                                f"Tracked window (ID: {tracked['id']}) no longer available - ignoring interactions for this window"
                             )
+                        tracked["region"] = None
+
+            # Check if all tracked windows are gone
+            if all(tracked["region"] is None for tracked in self._tracked_windows):
+                logging.getLogger("Screen").error(
+                    "All tracked windows have been closed. Stopping recording."
+                )
+                # Stop the observer by setting running flag to False
+                self._running = False
 
     def _is_point_in_region(self, x: float, y: float, region: dict) -> bool:
         """Check if a point (in global coordinates) is inside a region."""
@@ -536,6 +613,9 @@ class Screen(Observer):
         Returns the tracked window dict {"id": ..., "region": ...} or None if not found.
         """
         for tracked in self._tracked_windows:
+            # Skip windows that have been closed (region is None)
+            if tracked["region"] is None:
+                continue
             if self._is_point_in_region(x, y, tracked["region"]):
                 return tracked
         return None
@@ -635,6 +715,10 @@ class Screen(Observer):
 
     async def _cleanup_old_screenshots(self) -> None:
         """Delete screenshots older than _MAX_SCREENSHOT_AGE to prevent disk space issues."""
+        # Skip cleanup if disabled
+        if self._MAX_SCREENSHOT_AGE is None:
+            return
+
         try:
             current_time = time.time()
             deleted_count = 0
@@ -887,8 +971,14 @@ class Screen(Observer):
                 # Update tracked regions before capturing "after" frame
                 await self._update_tracked_regions()
 
-                # Use the region from the event for capturing the "after" frame
-                mon_rect = ev["monitor_rect"]
+                # Get the current region for this window (after update)
+                # ev["mon"] is 1-indexed, so subtract 1 for list access
+                mon_idx = ev["mon"] - 1
+                if 0 <= mon_idx < len(self._tracked_windows):
+                    mon_rect = self._tracked_windows[mon_idx]["region"]
+                else:
+                    mon_rect = ev["monitor_rect"]  # Fallback to stored rect
+
                 if mon_rect is None:
                     if self.debug:
                         logging.getLogger("Screen").warning(
@@ -913,7 +1003,7 @@ class Screen(Observer):
 
                 bef_path = await self._save_frame(
                     ev["before"],
-                    ev["monitor_rect"],
+                    ev["monitor_rect"],  # Use original region that matches the captured frame
                     ev["position"][0],
                     ev["position"][1],
                     f"{step}_before",
@@ -940,7 +1030,20 @@ class Screen(Observer):
                 if tracked["id"] is not None:
                     await self._update_tracked_regions()
 
+                    # Verify window is still valid after update
+                    if tracked["region"] is None:
+                        if self.debug:
+                            log.warning(f"Tracked window no longer available, skipping capture")
+                        return
+
                 mon = tracked["region"]
+
+                # Final validation: ensure region is valid
+                if not mon or mon.get("width", 0) <= 0 or mon.get("height", 0) <= 0:
+                    if self.debug:
+                        log.warning(f"Invalid region for tracked window, skipping capture")
+                    return
+
                 rel_x = x - mon["left"]
                 rel_y = y - mon["top"]
                 idx = self._tracked_windows.index(tracked) + 1  # 1-indexed for display
@@ -991,7 +1094,20 @@ class Screen(Observer):
                 if tracked["id"] is not None:
                     await self._update_tracked_regions()
 
+                    # Verify window is still valid after update
+                    if tracked["region"] is None:
+                        if self.debug:
+                            log.warning(f"Tracked window no longer available, skipping keyboard capture")
+                        return
+
                 mon = tracked["region"]
+
+                # Final validation: ensure region is valid
+                if not mon or mon.get("width", 0) <= 0 or mon.get("height", 0) <= 0:
+                    if self.debug:
+                        log.warning(f"Invalid region for tracked window, skipping keyboard capture")
+                    return
+
                 rel_x = x - mon["left"]
                 rel_y = y - mon["top"]
                 idx = self._tracked_windows.index(tracked) + 1  # 1-indexed for display
@@ -1071,7 +1187,20 @@ class Screen(Observer):
                 if tracked["id"] is not None:
                     await self._update_tracked_regions()
 
+                    # Verify window is still valid after update
+                    if tracked["region"] is None:
+                        if self.debug:
+                            log.warning(f"Tracked window no longer available, skipping scroll capture")
+                        return
+
                 mon = tracked["region"]
+
+                # Final validation: ensure region is valid
+                if not mon or mon.get("width", 0) <= 0 or mon.get("height", 0) <= 0:
+                    if self.debug:
+                        log.warning(f"Invalid region for tracked window, skipping scroll capture")
+                    return
+
                 rel_x = x - mon["left"]
                 rel_y = y - mon["top"]
                 idx = self._tracked_windows.index(tracked) + 1  # 1-indexed for display

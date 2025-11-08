@@ -43,6 +43,41 @@ def _max_screen_y():
     return max_y
 
 
+def _check_multi_monitor_spanning(x: int, y: int, w: int, h: int) -> bool:
+    """Check if a region spans multiple monitors.
+
+    Returns True if the region is mostly on one monitor, False if it spans multiple.
+    """
+    import Quartz
+
+    err, ids, cnt = Quartz.CGGetActiveDisplayList(16, None, None)
+    if err != Quartz.kCGErrorSuccess or cnt <= 1:
+        return True  # Single monitor or error, no spanning possible
+
+    best_overlap = 0
+    region_area = w * h
+
+    for did in ids[:cnt]:
+        bounds = Quartz.CGDisplayBounds(did)
+        mon_x = int(bounds.origin.x)
+        mon_y = int(bounds.origin.y)
+        mon_w = int(bounds.size.width)
+        mon_h = int(bounds.size.height)
+
+        # Calculate overlap
+        overlap_x1 = max(x, mon_x)
+        overlap_y1 = max(y, mon_y)
+        overlap_x2 = min(x + w, mon_x + mon_w)
+        overlap_y2 = min(y + h, mon_y + mon_h)
+
+        if overlap_x2 > overlap_x1 and overlap_y2 > overlap_y1:
+            overlap_area = (overlap_x2 - overlap_x1) * (overlap_y2 - overlap_y1)
+            best_overlap = max(best_overlap, overlap_area)
+
+    # If less than 90% of the region is on the best monitor, it spans multiple monitors
+    return best_overlap >= (region_area * 0.9)
+
+
 class OverlayWindow(AppKit.NSWindow):
     def canBecomeKeyWindow(self):
         return True
@@ -100,8 +135,27 @@ class SelectionView(AppKit.NSView):
             win = self.window()
             if win is not None:
                 win.makeFirstResponder_(self)
+                # Set up tracking area for mouse movement
+                self.updateTrackingAreas()
         except Exception:
             pass
+
+    def updateTrackingAreas(self):
+        """Set up tracking area to receive mouse moved events."""
+        objc.super(SelectionView, self).updateTrackingAreas()
+
+        # Remove any existing tracking areas
+        for area in self.trackingAreas():
+            self.removeTrackingArea_(area)
+
+        # Add new tracking area covering the entire view
+        tracking_area = AppKit.NSTrackingArea.alloc().initWithRect_options_owner_userInfo_(
+            self.bounds(),
+            AppKit.NSTrackingMouseMoved | AppKit.NSTrackingActiveAlways | AppKit.NSTrackingInVisibleRect,
+            self,
+            None
+        )
+        self.addTrackingArea_(tracking_area)
 
     def acceptsFirstResponder(self):
         return True
@@ -160,6 +214,8 @@ class SelectionView(AppKit.NSView):
                 # Remove window_id from regions as it's stored separately
                 for region in _selected_regions:
                     region.pop("window_id", None)
+                    region.pop("_owner", None)  # Remove debug field
+                    region.pop("_name", None)  # Remove debug field
                 print(f"Confirming selection of {len(self.selected_windows)} window(s)")
                 print(
                     f"Setting global _selected_regions to {len(_selected_regions)} items"
@@ -188,13 +244,12 @@ class SelectionView(AppKit.NSView):
 
         # Only primary monitor shows DONE button
         if self.is_primary:
-            # Check if clicking the DONE button (top-right area of banner)
-            banner_height = 60
-            screen_height = self.bounds().size.height
-            button_width = 120
-            button_height = 40
-            button_x = self.bounds().size.width - button_width - 20
-            button_y = screen_height - banner_height + 10
+            # Check if clicking the DONE button (bottom-right area of banner)
+            banner_height = 80
+            button_width = 160
+            button_height = 50
+            button_x = self.bounds().size.width - button_width - 30
+            button_y = (banner_height - button_height) / 2
 
             if (
                 button_x <= location.x <= button_x + button_width
@@ -211,6 +266,8 @@ class SelectionView(AppKit.NSView):
                     ]
                     for region in _selected_regions:
                         region.pop("window_id", None)
+                        region.pop("_owner", None)  # Remove debug field
+                        region.pop("_name", None)  # Remove debug field
                     _selection_confirmed = True
                     self._close_all_overlays()
                     return
@@ -230,6 +287,8 @@ class SelectionView(AppKit.NSView):
                 ]
                 for region in _selected_regions:
                     region.pop("window_id", None)
+                    region.pop("_owner", None)  # Remove debug field
+                    region.pop("_name", None)  # Remove debug field
                 _selection_confirmed = True
                 self._close_all_overlays()
                 return
@@ -248,12 +307,39 @@ class SelectionView(AppKit.NSView):
                     break
 
             if not already_selected and window_id:
-                # Add window to selection
-                _shared_selected_windows.append(window_info.copy())
-                print(
-                    f"✓ Added window to selection (total: {len(_shared_selected_windows)})"
-                )
-                print("  → Click DONE button or double-click empty area")
+                # Validate window size before adding
+                win_w = window_info.get("width", 0)
+                win_h = window_info.get("height", 0)
+                win_x = window_info.get("left", 0)
+                win_y = window_info.get("top", 0)
+                MIN_WIDTH = 200
+                MIN_HEIGHT = 150
+
+                # Get screen dimensions for maximum size validation
+                screens = AppKit.NSScreen.screens()
+                max_screen_width = max(scr.frame().size.width for scr in screens) if screens else 3840
+                max_screen_height = max(scr.frame().size.height for scr in screens) if screens else 2160
+                MAX_WIDTH = max_screen_width
+                MAX_HEIGHT = max_screen_height
+
+                if win_w < MIN_WIDTH or win_h < MIN_HEIGHT:
+                    print(f"⚠️  Window too small ({win_w}x{win_h}). Minimum: {MIN_WIDTH}x{MIN_HEIGHT} pixels")
+                elif win_w > MAX_WIDTH or win_h > MAX_HEIGHT:
+                    print(f"⚠️  Window too large ({win_w}x{win_h}). Maximum: {int(MAX_WIDTH)}x{int(MAX_HEIGHT)} pixels")
+                    print(f"    Hint: This might be a desktop/parent window. Try clicking on specific application windows.")
+                elif not _check_multi_monitor_spanning(win_x, win_y, win_w, win_h):
+                    print(f"⚠️  Window spans multiple monitors ({win_w}x{win_h})")
+                    print(f"    Hint: Select windows that fit within a single monitor to avoid merged screenshots")
+                else:
+                    # Add window to selection
+                    owner = window_info.get("_owner", "")
+                    name = window_info.get("_name", "")
+                    _shared_selected_windows.append(window_info.copy())
+                    print(
+                        f"✓ Added window to selection: {win_w}x{win_h} (total: {len(_shared_selected_windows)})"
+                    )
+                    print(f"  Owner: {owner!r}, Name: {name!r}")
+                    print("  → Click DONE button or double-click empty area")
 
             self.highlighted_window = None
             # Refresh all overlay views to show updated selection
@@ -292,6 +378,41 @@ class SelectionView(AppKit.NSView):
         quartz_top = max_y - (global_bottom + height)
 
         # Add manual region to selection (no window_id for manual regions)
+        # Validate minimum and maximum size to avoid capturing tiny or excessively large regions
+        MIN_WIDTH = 200
+        MIN_HEIGHT = 150
+
+        # Get screen dimensions for maximum size validation
+        screens = AppKit.NSScreen.screens()
+        max_screen_width = max(scr.frame().size.width for scr in screens) if screens else 3840
+        max_screen_height = max(scr.frame().size.height for scr in screens) if screens else 2160
+        MAX_WIDTH = max_screen_width
+        MAX_HEIGHT = max_screen_height
+
+        if width < MIN_WIDTH or height < MIN_HEIGHT:
+            print(f"⚠️  Region too small ({int(width)}x{int(height)}). Minimum: {MIN_WIDTH}x{MIN_HEIGHT} pixels")
+            self.start = None
+            self.end = None
+            self.setNeedsDisplay_(True)
+            return
+
+        if width > MAX_WIDTH or height > MAX_HEIGHT:
+            print(f"⚠️  Region too large ({int(width)}x{int(height)}). Maximum: {int(MAX_WIDTH)}x{int(MAX_HEIGHT)} pixels")
+            print(f"    Hint: Select individual application windows, not the entire desktop")
+            self.start = None
+            self.end = None
+            self.setNeedsDisplay_(True)
+            return
+
+        # Check if region spans multiple monitors
+        if not _check_multi_monitor_spanning(int(global_left), int(quartz_top), int(width), int(height)):
+            print(f"⚠️  Region spans multiple monitors ({int(width)}x{int(height)})")
+            print(f"    Hint: Draw regions within a single monitor to avoid merged screenshots")
+            self.start = None
+            self.end = None
+            self.setNeedsDisplay_(True)
+            return
+
         manual_region = {
             "left": int(global_left),
             "top": int(quartz_top),
@@ -299,7 +420,7 @@ class SelectionView(AppKit.NSView):
             "height": int(height),
         }
         _shared_selected_windows.append(manual_region)
-        print(f"Added manual region to selection (total: {len(_shared_selected_windows)})")
+        print(f"✓ Added manual region to selection: {int(width)}x{int(height)} (total: {len(_shared_selected_windows)})")
 
         # Reset drag state
         self.start = None
@@ -328,6 +449,14 @@ class SelectionView(AppKit.NSView):
             max_y = max(max_y, f.origin.y + f.size.height)
         quartz_y = max_y - screen_point.y
 
+        # Get screen dimensions for size validation
+        screens = AppKit.NSScreen.screens()
+        max_screen_width = max(scr.frame().size.width for scr in screens) if screens else 3840
+        max_screen_height = max(scr.frame().size.height for scr in screens) if screens else 2160
+
+        # Find all windows that contain the click point
+        # Prefer the largest window to avoid selecting small sub-components
+        matching_windows = []
         for win in window_list:
             bounds = win.get("kCGWindowBounds", {})
             if not bounds:
@@ -339,38 +468,79 @@ class SelectionView(AppKit.NSView):
                 bounds.get("Height", 0),
             )
             layer = win.get("kCGWindowLayer", 0)
-            if layer >= AppKit.NSFloatingWindowLevel or w < 50 or h < 50:
+            owner_name = win.get("kCGWindowOwnerName", "")
+            window_name = win.get("kCGWindowName", "")
+
+            # Filter out system/desktop windows by owner
+            excluded_owners = {"Dock", "WindowServer", "Window Manager", "Desktop", "Wallpaper"}
+            if owner_name in excluded_owners:
+                continue
+
+            # Filter out windows with names suggesting desktop/workspace
+            if window_name and any(word in window_name.lower() for word in ["desktop", "wallpaper", "workspace"]):
+                continue
+
+            # Filter out floating windows, very small windows (min 200x150), and excessively large windows
+            if layer >= AppKit.NSFloatingWindowLevel or w < 200 or h < 150:
+                continue
+
+            # Filter out screen-sized windows ONLY if they appear to be desktop/parent containers
+            # Allow legitimate full-screen app windows (Chrome, VS Code, etc.)
+            if w >= max_screen_width or h >= max_screen_height:
+                # Allow if it has a legitimate app owner (not empty or generic)
+                if not owner_name or owner_name in {"Window Server", "Window Manager", "Finder"}:
+                    # Likely a desktop container - reject it
+                    continue
+                # Otherwise allow (it's probably a real app in full-screen mode)
+            # Filter out windows that span multiple monitors
+            if not _check_multi_monitor_spanning(x, y, w, h):
                 continue
             if x <= screen_point.x <= x + w and y <= quartz_y <= y + h:
                 window_id = win.get("kCGWindowNumber")
-                return {
+                matching_windows.append({
                     "left": int(x),
                     "top": int(y),
                     "width": int(w),
                     "height": int(h),
                     "window_id": window_id,
-                }
+                    "area": w * h,
+                    "_owner": owner_name,  # For debugging
+                    "_name": window_name,  # For debugging
+                })
+
+        # Return the largest matching window
+        if matching_windows:
+            largest = max(matching_windows, key=lambda w: w["area"])
+            largest.pop("area")  # Remove helper field
+            # Keep _owner and _name for debugging (will be removed before capture)
+            return largest
         return None
 
     def drawRect_(self, _):
         # Only draw banner and button on primary monitor
         if self.is_primary:
-            # Draw instruction banner at top
-            banner_height = 60
+            # Draw instruction banner at BOTTOM (more visible than top)
+            banner_height = 80
             banner_rect = AppKit.NSMakeRect(
                 0,
-                self.bounds().size.height - banner_height,
+                0,  # Bottom of screen
                 self.bounds().size.width,
                 banner_height,
             )
-            AppKit.NSColor.colorWithCalibratedWhite_alpha_(0, 0.8).set()
+            # More opaque background for better visibility
+            AppKit.NSColor.colorWithCalibratedWhite_alpha_(0, 0.95).set()
             AppKit.NSBezierPath.fillRect_(banner_rect)
 
-            # Draw DONE button (top-right)
-            button_width = 120
-            button_height = 40
-            button_x = self.bounds().size.width - button_width - 20
-            button_y = self.bounds().size.height - banner_height + 10
+            # Add a bright border at top of banner for extra visibility
+            AppKit.NSColor.colorWithCalibratedWhite_alpha_(1.0, 0.3).set()
+            top_border = AppKit.NSMakeRect(0, banner_height - 2, self.bounds().size.width, 2)
+            AppKit.NSBezierPath.fillRect_(top_border)
+
+            # Draw DONE button (center-right of banner for visibility)
+            button_width = 160
+            button_height = 50
+            button_x = self.bounds().size.width - button_width - 30
+            button_y = (banner_height - button_height) / 2
 
             button_rect = AppKit.NSMakeRect(button_x, button_y, button_width, button_height)
             button_path = AppKit.NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
@@ -378,23 +548,29 @@ class SelectionView(AppKit.NSView):
             )
 
             if self.selected_windows:
-                # Enabled - green
+                # Enabled - bright green
                 AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
-                    0.2, 0.8, 0.3, 0.9
+                    0.0, 0.9, 0.2, 1.0
                 ).setFill()
             else:
-                # Disabled - gray
-                AppKit.NSColor.colorWithCalibratedWhite_alpha_(0.5, 0.5).setFill()
+                # Disabled - more visible gray
+                AppKit.NSColor.colorWithCalibratedWhite_alpha_(0.3, 0.8).setFill()
 
             button_path.fill()
+
+            # Bright white outline for visibility
             AppKit.NSColor.whiteColor().setStroke()
-            button_path.setLineWidth_(2)
+            button_path.setLineWidth_(3)
             button_path.stroke()
 
-            # Draw DONE text
-            done_text = AppKit.NSString.stringWithString_("DONE")
+            # Draw DONE text - larger and clearer
+            if self.selected_windows:
+                done_text_str = "✓ DONE"
+            else:
+                done_text_str = "DONE"
+            done_text = AppKit.NSString.stringWithString_(done_text_str)
             done_attrs = {
-                AppKit.NSFontAttributeName: AppKit.NSFont.boldSystemFontOfSize_(18),
+                AppKit.NSFontAttributeName: AppKit.NSFont.boldSystemFontOfSize_(22),
                 AppKit.NSForegroundColorAttributeName: AppKit.NSColor.whiteColor(),
             }
             done_size = done_text.sizeWithAttributes_(done_attrs)
@@ -404,20 +580,19 @@ class SelectionView(AppKit.NSView):
                 AppKit.NSMakePoint(done_x, done_y), done_attrs
             )
 
-            # Draw instruction text
-            text_str = "Click windows to toggle selection  •  Click again to deselect"
+            # Draw instruction text - larger and clearer
+            if self.selected_windows:
+                text_str = f"✓ {len(self.selected_windows)} window(s) selected  •  Click to deselect  •  Press ENTER or click DONE"
+            else:
+                text_str = "Click windows to select  •  Double-click empty area to confirm  •  ESC to cancel"
             text = AppKit.NSString.stringWithString_(text_str)
             attrs = {
-                AppKit.NSFontAttributeName: AppKit.NSFont.systemFontOfSize_(14),
+                AppKit.NSFontAttributeName: AppKit.NSFont.systemFontOfSize_(16),
                 AppKit.NSForegroundColorAttributeName: AppKit.NSColor.whiteColor(),
             }
             text_size = text.sizeWithAttributes_(attrs)
-            text_x = 20  # Left-aligned
-            text_y = (
-                self.bounds().size.height
-                - banner_height
-                + (banner_height - text_size.height) / 2
-            )
+            text_x = 30  # Left-aligned with padding
+            text_y = (banner_height - text_size.height) / 2
             text.drawAtPoint_withAttributes_(AppKit.NSMakePoint(text_x, text_y), attrs)
 
         # Calculate max_y once for coordinate conversions
@@ -427,8 +602,30 @@ class SelectionView(AppKit.NSView):
             max_y = max(max_y, f.origin.y + f.size.height)
         window_frame = self.window().frame()
 
-        # Draw selected windows in green
+        # Draw selected windows in green - only if they're currently visible on this Space
         for idx, win in enumerate(self.selected_windows, 1):
+            # Check if this window is currently on-screen (on the active Space)
+            win_id = win.get("window_id")
+            if win_id is not None:
+                # Query if the window is currently visible on this Space
+                window_list = Quartz.CGWindowListCopyWindowInfo(
+                    Quartz.kCGWindowListOptionOnScreenOnly,
+                    Quartz.kCGNullWindowID,
+                )
+                window_visible = False
+                if window_list:
+                    for w in window_list:
+                        if w.get("kCGWindowNumber") == win_id:
+                            # Window is on-screen, check if it's on the active Space
+                            is_onscreen = w.get("kCGWindowIsOnscreen", False)
+                            if is_onscreen:
+                                window_visible = True
+                            break
+
+                # Skip drawing if window is not visible on current Space
+                if not window_visible:
+                    continue
+
             view_x = win["left"] - window_frame.origin.x
             view_y = (max_y - win["top"] - win["height"]) - window_frame.origin.y
             rect = AppKit.NSMakeRect(view_x, view_y, win["width"], win["height"])
@@ -570,7 +767,7 @@ def select_region_with_mouse() -> tuple[list[dict], list[int | None]]:
         window.setAcceptsMouseMovedEvents_(True)
         window.setHidesOnDeactivate_(False)
 
-        # Set collection behavior
+        # Set collection behavior - appear on all monitors, but filter drawing by visibility
         try:
             behavior = (AppKit.NSWindowCollectionBehaviorCanJoinAllSpaces |
                        AppKit.NSWindowCollectionBehaviorFullScreenAuxiliary |
