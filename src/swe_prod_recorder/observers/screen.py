@@ -563,13 +563,66 @@ class Screen(Observer):
             and region["top"] <= y < region["top"] + region["height"]
         )
 
+    def _get_topmost_window_at_point(self, x: float, y: float) -> Optional[int]:
+        """Get the window ID of the topmost window at the given point.
+
+        Returns the CGWindowNumber of the topmost window at (x, y), or None if none found.
+        """
+        import Quartz
+
+        # Get all on-screen windows at this point
+        opts = (
+            Quartz.kCGWindowListOptionOnScreenOnly
+            | Quartz.kCGWindowListExcludeDesktopElements
+        )
+        wins = Quartz.CGWindowListCopyWindowInfo(opts, Quartz.kCGNullWindowID)
+
+        if not wins:
+            return None
+
+        # Calculate global max_y for coordinate conversion
+        _, _, _, gmax_y = _get_global_bounds()
+        quartz_y = gmax_y - y
+
+        # Find first window at this point (topmost in Z-order)
+        for win in wins:
+            bounds = win.get("kCGWindowBounds", {})
+            if not bounds:
+                continue
+
+            wx, wy, ww, wh = (
+                bounds.get("X", 0),
+                bounds.get("Y", 0),
+                bounds.get("Width", 0),
+                bounds.get("Height", 0),
+            )
+
+            # Check if point is within this window
+            if wx <= x <= wx + ww and wy <= quartz_y <= wy + wh:
+                window_id = win.get("kCGWindowNumber")
+                return window_id
+
+        return None
+
     def _find_region_for_point(self, x: float, y: float) -> Optional[dict]:
         """Find which tracked window/region contains this point.
 
         Returns the tracked window dict {"id": ..., "region": ...} or None if not found.
+
+        IMPORTANT: For tracked windows (not manual regions), this also verifies
+        that the tracked window is actually the topmost window at this point.
         """
         for tracked in self._tracked_windows:
             if self._is_point_in_region(x, y, tracked["region"]):
+                # If this is a tracked window (has window_id), verify it's topmost
+                if tracked["id"] is not None:
+                    topmost_id = self._get_topmost_window_at_point(x, y)
+                    if topmost_id != tracked["id"]:
+                        # Tracked window is not topmost - ignore this interaction
+                        if self.debug:
+                            print(f"Interaction at ({x:.1f}, {y:.1f}): tracked window {tracked['id']} not topmost (topmost: {topmost_id})")
+                        continue
+                # Point is in region and (if tracked) window is topmost
                 return tracked
         return None
 
