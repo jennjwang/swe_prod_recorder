@@ -1,5 +1,8 @@
 import argparse
 import asyncio
+import signal
+import sys
+import threading
 
 from .gum import gum
 from .observers import Screen
@@ -64,7 +67,25 @@ def parse_args():
     return parser.parse_args()
 
 
-async def _main():
+async def _async_main(args, screen_observer, stop_event):
+    """Run the async part in a background thread"""
+    data_directory = "data"
+
+    try:
+        async with gum(args.user_name, screen_observer, data_directory=data_directory):
+            # Wait for stop signal
+            while not stop_event.is_set():
+                await asyncio.sleep(0.1)
+    except Exception as e:
+        print(f"Error in async main: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        print("Async context exiting...")
+
+
+def main():
+    """Main entry point - runs on main thread (macOS-safe for pynput)"""
     args = parse_args()
     print(f"User Name: {args.user_name}")
 
@@ -92,6 +113,7 @@ async def _main():
     print("\nStarting recording...\n")
 
     # Create Screen observer with scroll filtering configuration
+    # This will do window selection on the main thread (AppKit modal - correct!)
     screen_observer = Screen(
         screenshots_dir=args.screenshots_dir,
         debug=args.debug,
@@ -101,14 +123,51 @@ async def _main():
         scroll_session_timeout=args.scroll_session_timeout,
         upload_to_gdrive=args.upload_to_gdrive,
         inactivity_timeout=args.inactivity_timeout * 60,  # Convert minutes to seconds
+        start_listeners_on_main_thread=True,  # New flag
     )
 
-    # Use data directory for database, screenshots go in data/screenshots
-    data_directory = "data"
+    # Event to signal shutdown
+    stop_event = threading.Event()
 
-    async with gum(args.user_name, screen_observer, data_directory=data_directory):
-        await asyncio.Future()  # run forever (Ctrl-C to stop)
+    # Run asyncio in a background thread
+    print("Starting async event loop in background thread...")
+    async_thread = threading.Thread(
+        target=lambda: asyncio.run(_async_main(args, screen_observer, stop_event)),
+        daemon=True,
+        name="AsyncIOThread"
+    )
+    async_thread.start()
 
+    # Give async loop time to start
+    import time
+    time.sleep(0.5)
 
-def main():
-    asyncio.run(_main())
+    # Set up signal handler for Ctrl+C
+    def signal_handler(sig, frame):
+        print("\n\nShutting down...")
+        stop_event.set()
+        screen_observer.stop_listeners_sync()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, signal_handler)
+
+    try:
+        # Now start pynput listeners on main thread (macOS-safe!)
+        print("Starting input listeners on main thread (macOS-safe)...")
+        screen_observer.run_listeners_on_main_thread()
+
+        # If listeners return, wait for async thread
+        print("Listeners stopped, waiting for async thread...")
+        stop_event.set()
+        async_thread.join(timeout=5)
+
+    except KeyboardInterrupt:
+        print("\n\nShutting down...")
+        stop_event.set()
+        screen_observer.stop_listeners_sync()
+    except Exception as e:
+        print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
+        stop_event.set()
+        screen_observer.stop_listeners_sync()
