@@ -71,6 +71,24 @@ class SelectionView(AppKit.NSView):
             AppKit.NSApp().stopModalWithCode_(AppKit.NSModalResponseCancel)
             return
 
+        # F = fullscreen
+        elif keyCode == 3:  # kVK_F
+            print("F pressed - selecting full screen")
+            # Get the main screen bounds
+            screen = AppKit.NSScreen.mainScreen().frame()
+            fullscreen_region = {
+                "left": int(screen.origin.x),
+                "top": int(screen.origin.y),
+                "width": int(screen.size.width),
+                "height": int(screen.size.height),
+            }
+            _selected_regions = [fullscreen_region]
+            _selected_window_ids = [None]
+            print(f"Selected full screen: {fullscreen_region}")
+            self.window().orderOut_(None)
+            AppKit.NSApp().stopModalWithCode_(AppKit.NSModalResponseOK)
+            return
+
         # Enter/Return = confirm selection
         elif keyCode == 36 or keyCode == 76:  # kVK_Return or kVK_KeypadEnter
             print(
@@ -328,7 +346,7 @@ class SelectionView(AppKit.NSView):
         )
 
         # Draw instruction text
-        text_str = "Click windows to toggle selection  •  Click again to deselect"
+        text_str = "Click windows to toggle  •  Press F for fullscreen  •  Press ESC to cancel"
         text = AppKit.NSString.stringWithString_(text_str)
         attrs = {
             AppKit.NSFontAttributeName: AppKit.NSFont.systemFontOfSize_(14),
@@ -495,7 +513,9 @@ def select_region_with_mouse() -> tuple[list[dict], list[int | None]]:
     print("=" * 70)
     print("1. Click on windows to SELECT them (they turn GREEN)")
     print("2. Click selected windows again to DESELECT them")
-    print("3. Click the green DONE button at top-right to confirm")
+    print("3. Press F to select the FULL SCREEN")
+    print("4. Click the green DONE button at top-right to confirm")
+    print("5. Press ESC to cancel")
     print("=" * 70 + "\n")
 
     AppKit.NSCursor.crosshairCursor().push()
