@@ -470,7 +470,7 @@ class Screen(Observer):
         # call parent
         super().__init__()
 
-        # Store event loop reference and handlers (will be set when worker starts)
+        # Event loop and handler references (set when worker starts)
         self._loop = None
         self._mouse_handler = None
         self._scroll_handler = None
@@ -478,9 +478,9 @@ class Screen(Observer):
         self._mouse_listener = None
         self._key_listener = None
         self._start_listeners_on_main_thread = start_listeners_on_main_thread
+        self._listeners_started = False
 
-        # Initialize pynput listeners callbacks
-        # The callbacks will invoke the handlers once they're set
+        # Define listener callbacks that safely schedule events to async loop
         def safe_schedule_event(x: float, y: float, typ: str):
             if self._loop and self._mouse_handler:
                 asyncio.run_coroutine_threadsafe(self._mouse_handler(x, y, typ), self._loop)
@@ -493,7 +493,7 @@ class Screen(Observer):
             if self._loop and self._key_handler:
                 asyncio.run_coroutine_threadsafe(self._key_handler(key, typ), self._loop)
 
-        # Store the listener factory functions (will create listeners later)
+        # Store listener factory functions for deferred initialization
         self._mouse_listener_factory = lambda: mouse.Listener(
             on_click=lambda x, y, btn, prs: safe_schedule_event(x, y, f"click_{btn.name}") if prs else None,
             on_scroll=lambda x, y, dx, dy: safe_schedule_scroll(x, y, dx, dy),
@@ -501,9 +501,6 @@ class Screen(Observer):
         self._key_listener_factory = lambda: keyboard.Listener(
             on_press=lambda key: safe_schedule_key(key, "press"),
         )
-
-        # Don't start listeners yet - will start later
-        self._listeners_started = False
 
         # Adjust settings for high-DPI displays
         if self._is_high_dpi:
@@ -835,25 +832,22 @@ class Screen(Observer):
     def run_listeners_on_main_thread(self):
         """Run pynput listeners on main thread (blocks until stopped).
 
-        This is the macOS-safe way to run pynput listeners, as the TIS APIs
-        they call require being on the main dispatch queue.
+        On macOS, the keyboard listener calls TIS (Text Input Source) APIs which
+        must run on the main dispatch queue. We call run() directly instead of
+        start() to avoid creating background threads.
 
-        IMPORTANT: We call run() directly instead of start() to avoid creating
-        background threads. The run() method executes on the current thread.
+        Mouse listener runs in background thread (doesn't need TIS APIs).
+        Keyboard listener runs on main thread (blocks, but macOS-safe).
         """
         if not self._start_listeners_on_main_thread:
-            raise RuntimeError("This Screen observer was not configured for main thread listeners")
+            raise RuntimeError("Screen observer not configured for main thread listeners")
 
         # Create listeners
-        print("Creating pynput listeners...")
         self._mouse_listener = self._mouse_listener_factory()
         self._key_listener = self._key_listener_factory()
         self._listeners_started = True
 
-        print("Listeners created, starting on main thread...")
-        print("(Running event loop on main thread - macOS-safe for TIS APIs)")
-
-        # Start mouse listener in a background thread (mouse doesn't need TIS APIs)
+        # Start mouse listener in background thread
         import threading
         mouse_thread = threading.Thread(
             target=self._mouse_listener.run,
@@ -861,17 +855,13 @@ class Screen(Observer):
             name="MouseListener"
         )
         mouse_thread.start()
-        print("✓ Mouse listener started")
 
-        # Run keyboard listener on MAIN thread (needs TIS APIs - must be on main queue)
-        print("✓ Starting keyboard listener on main thread (blocks)...")
+        # Run keyboard listener on main thread (blocks until stopped)
         try:
-            # This blocks on the main thread, running the CFRunLoop
             self._key_listener.run()
         except KeyboardInterrupt:
-            print("\nKeyboard interrupt received")
+            pass
         finally:
-            # Clean up
             self._mouse_listener.stop()
             mouse_thread.join(timeout=1)
 
@@ -933,35 +923,28 @@ class Screen(Observer):
             # Create and start listeners if not using main thread mode
             if not self._start_listeners_on_main_thread:
                 if not self._listeners_started:
-                    print("Creating input listeners in async worker...")
                     self._mouse_listener = self._mouse_listener_factory()
                     self._key_listener = self._key_listener_factory()
 
-                    # Give a brief delay to let AppKit state settle
+                    # Brief delay to let AppKit modal state settle after window selection
                     await asyncio.sleep(0.1)
 
-                    print("Starting input listeners...")
                     self._mouse_listener.start()
                     self._key_listener.start()
                     self._listeners_started = True
-                    print("Input listeners started successfully")
 
             # Wait for listeners to be started (might be on main thread)
-            max_wait = 10  # seconds
             wait_time = 0
-            while not self._listeners_started and wait_time < max_wait:
+            while not self._listeners_started and wait_time < 10:
                 await asyncio.sleep(0.1)
                 wait_time += 0.1
 
             if not self._listeners_started:
-                log.error("Listeners were not started after 10 seconds")
+                log.error("Listeners not started after 10 seconds")
                 return
 
             mouse_listener = self._mouse_listener
             key_listener = self._key_listener
-
-            # Define event handlers and link them to the callbacks
-            # (will be set after defining the nested functions)
 
             # ---- nested helper inside the async context ----
             async def flush():
@@ -1288,12 +1271,11 @@ class Screen(Observer):
                 dt = time.time() - t0
                 await asyncio.sleep(max(0, (1 / CAP_FPS) - dt))
 
-            # shutdown listeners (only if we started them in async worker)
+            # Shutdown listeners if started in async worker
+            # (main thread listeners are stopped via stop_listeners_sync)
             if not self._start_listeners_on_main_thread:
-                if mouse_listener:
-                    mouse_listener.stop()
-                if key_listener:
-                    key_listener.stop()
+                mouse_listener.stop()
+                key_listener.stop()
 
             # Final cleanup of any remaining keyboard session
             if self._key_activity_start is not None and len(self._key_screenshots) > 1:

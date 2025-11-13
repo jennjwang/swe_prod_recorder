@@ -68,7 +68,10 @@ def parse_args():
 
 
 async def _async_main(args, screen_observer, stop_event):
-    """Run the async part in a background thread"""
+    """Run async event loop in background thread.
+
+    This manages the database, observer workers, and update processing.
+    """
     data_directory = "data"
 
     try:
@@ -77,19 +80,25 @@ async def _async_main(args, screen_observer, stop_event):
             while not stop_event.is_set():
                 await asyncio.sleep(0.1)
     except Exception as e:
-        print(f"Error in async main: {e}")
+        print(f"Error in async loop: {e}")
         import traceback
         traceback.print_exc()
-    finally:
-        print("Async context exiting...")
 
 
 def main():
-    """Main entry point - runs on main thread (macOS-safe for pynput)"""
+    """Main entry point.
+
+    Architecture:
+    - Main thread: Runs pynput listeners (macOS-safe for TIS APIs)
+    - Background thread: Runs asyncio event loop (database, observers, updates)
+
+    This architecture ensures pynput's keyboard listener (which calls macOS TIS
+    APIs) runs on the main thread, avoiding dispatch queue assertion failures.
+    """
     args = parse_args()
     print(f"User Name: {args.user_name}")
 
-    # Display warning message before starting recording
+    # Display user warning and instructions
     print("\n" + "=" * 70)
     print("⚠️  BEFORE YOU BEGIN RECORDING")
     print("=" * 70)
@@ -108,12 +117,10 @@ def main():
     print("don't want to share.")
     print("\n" + "=" * 70)
 
-    # Wait for user confirmation
     input("\nPress Enter to confirm and start recording...")
     print("\nStarting recording...\n")
 
-    # Create Screen observer with scroll filtering configuration
-    # This will do window selection on the main thread (AppKit modal - correct!)
+    # Create screen observer (window selection happens on main thread)
     screen_observer = Screen(
         screenshots_dir=args.screenshots_dir,
         debug=args.debug,
@@ -122,15 +129,14 @@ def main():
         scroll_max_frequency=args.scroll_max_frequency,
         scroll_session_timeout=args.scroll_session_timeout,
         upload_to_gdrive=args.upload_to_gdrive,
-        inactivity_timeout=args.inactivity_timeout * 60,  # Convert minutes to seconds
-        start_listeners_on_main_thread=True,  # New flag
+        inactivity_timeout=args.inactivity_timeout * 60,
+        start_listeners_on_main_thread=True,  # macOS-safe mode
     )
 
-    # Event to signal shutdown
+    # Coordination between main and background threads
     stop_event = threading.Event()
 
-    # Run asyncio in a background thread
-    print("Starting async event loop in background thread...")
+    # Launch asyncio event loop in background thread
     async_thread = threading.Thread(
         target=lambda: asyncio.run(_async_main(args, screen_observer, stop_event)),
         daemon=True,
@@ -138,11 +144,11 @@ def main():
     )
     async_thread.start()
 
-    # Give async loop time to start
+    # Give async loop time to initialize
     import time
     time.sleep(0.5)
 
-    # Set up signal handler for Ctrl+C
+    # Set up Ctrl+C handler
     def signal_handler(sig, frame):
         print("\n\nShutting down...")
         stop_event.set()
@@ -152,12 +158,10 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
 
     try:
-        # Now start pynput listeners on main thread (macOS-safe!)
-        print("Starting input listeners on main thread (macOS-safe)...")
+        # Run pynput listeners on main thread (blocks until stopped)
         screen_observer.run_listeners_on_main_thread()
 
-        # If listeners return, wait for async thread
-        print("Listeners stopped, waiting for async thread...")
+        # Clean shutdown
         stop_event.set()
         async_thread.join(timeout=5)
 
