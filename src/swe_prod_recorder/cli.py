@@ -4,6 +4,23 @@ import signal
 import sys
 import threading
 
+# Fix pynput's AXIsProcessTrusted threading issue on macOS
+# pynput's MouseListener tries to lazily import AXIsProcessTrusted in a background thread,
+# which fails due to pyobjc's lazy import not being thread-safe. We pre-load it here on the
+# main thread before any listeners start.
+try:
+    from ApplicationServices import AXIsProcessTrusted as _AXIsProcessTrusted
+    from pynput._util import darwin
+
+    # Force the lazy load now on main thread
+    if hasattr(darwin, 'HIServices') and hasattr(darwin.HIServices, 'AXIsProcessTrusted'):
+        _ = darwin.HIServices.AXIsProcessTrusted()
+    elif hasattr(darwin, 'HIServices'):
+        darwin.HIServices.AXIsProcessTrusted = _AXIsProcessTrusted
+
+except Exception as e:
+    print(f"Warning: Could not pre-load AXIsProcessTrusted: {e}")
+
 from .gum import gum
 from .observers import Screen
 

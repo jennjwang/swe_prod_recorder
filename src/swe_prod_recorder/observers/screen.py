@@ -1,3 +1,25 @@
+"""Screen observer for capturing screenshots around user interactions.
+
+This module handles cross-platform screen capture with special attention to macOS
+coordinate system complexities:
+
+Coordinate Systems (macOS):
+- Cocoa/pynput: Y=0 at bottom-left (native mouse events)
+- Screen: Y=0 at top-left (internal storage)
+- Quartz: Y=0 at bottom-left (CGWindowListCopyWindowInfo)
+- mss: Y=0 at bottom-left (screen capture library)
+
+Key Conversions:
+- Cocoa → Screen: screen_y = gmax_y - cocoa_y
+- Screen → Quartz: quartz_y = gmax_y - screen_y - height
+- Quartz → Screen: screen_y = gmax_y - quartz_y - height
+
+Window Tracking:
+- Tracks window position dynamically as it moves
+- Preserves original window dimensions from selection (handles Electron apps)
+- Verifies tracked window is topmost before capturing interactions
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -30,9 +52,6 @@ from shapely.ops import unary_union
 from ..schemas import Update
 from .observer import Observer
 from .window import select_region_with_mouse
-
-# from openai import AsyncOpenAI
-# client = AsyncOpenAI()
 
 
 def initialize_google_drive(client_secrets_path: str = None) -> GoogleDrive:
@@ -215,8 +234,11 @@ def _get_visible_windows() -> List[tuple[dict, float]]:
 def _get_window_by_name(window_name: str) -> Optional[tuple[int, dict]]:
     """Get window ID and bounds by owner name.
 
-    Returns (window_id, bounds_dict) or None if not found.
-    Bounds dict has 'left', 'top', 'width', 'height' in top-left origin coordinates.
+    Returns
+    -------
+    tuple[int, dict] or None
+        (window_id, bounds_dict) where bounds are in screen coordinates (Y=0 at top)
+        {'left': x, 'top': y, 'width': w, 'height': h}
     """
     import Quartz
 
@@ -241,9 +263,8 @@ def _get_window_by_name(window_name: str) -> Optional[tuple[int, dict]]:
             w = int(bounds.get("Width", 0))
             h = int(bounds.get("Height", 0))
             if w > 0 and h > 0:
-                # Flip Y coordinate from Quartz bottom-left to top-left
-                # top = int(gmax_y - y - h)
-                top = y
+                # Flip Y coordinate from Quartz (bottom-left origin) to screen (top-left origin)
+                top = int(gmax_y - y - h)
                 bounds_dict = {"left": x, "top": top, "width": w, "height": h}
                 return (window_id, bounds_dict)
     return None
@@ -252,7 +273,11 @@ def _get_window_by_name(window_name: str) -> Optional[tuple[int, dict]]:
 def _get_window_bounds_by_id(window_id: int) -> Optional[dict]:
     """Get window bounds by window ID.
 
-    Returns bounds dict with 'left', 'top', 'width', 'height' in top-left origin coordinates.
+    Returns
+    -------
+    dict or None
+        Bounds in screen coordinates (Y=0 at top)
+        {'left': x, 'top': y, 'width': w, 'height': h}
     """
     import Quartz
 
@@ -273,9 +298,8 @@ def _get_window_bounds_by_id(window_id: int) -> Optional[dict]:
             w = int(bounds.get("Width", 0))
             h = int(bounds.get("Height", 0))
             if w > 0 and h > 0:
-                # Flip Y coordinate from Quartz bottom-left to top-left
-                # top = int(gmax_y - y - h)
-                top = y
+                # Flip Y coordinate from Quartz (bottom-left origin) to screen (top-left origin)
+                top = int(gmax_y - y - h)
                 return {"left": x, "top": top, "width": w, "height": h}
     return None
 
@@ -324,19 +348,29 @@ def _is_app_visible(names: Iterable[str]) -> bool:
 class Screen(Observer):
     """
     Capture before/after screenshots around user interactions.
-    Blocking work (Quartz, mss, Pillow, OpenAI Vision) is executed in
-    background threads via `asyncio.to_thread`.
 
-    Keyboard events are optimized to save disk space:
+    Coordinate System Handling (macOS):
+    - pynput mouse events: Cocoa coordinates (Y=0 at bottom)
+    - Internal storage: Screen coordinates (Y=0 at top)
+    - Quartz window queries: Return Quartz coordinates (Y=0 at bottom)
+    - mss.grab(): Expects Quartz coordinates (Y=0 at bottom)
+
+    Conversions:
+    - pynput → screen: screen_y = gmax_y - pynput_y
+    - screen → mss: mss_top = gmax_y - screen_top - height
+    - Quartz → screen: screen_top = gmax_y - quartz_y - height
+
+    Window Tracking:
+    - Use `track_window` parameter to dynamically follow a specific window
+    - The capture region automatically updates when the window moves
+    - Window dimensions from selection are preserved (handles Electron apps)
+    - Use `list_available_windows()` to see available window names
+    - Example: Screen(track_window="Google Chrome")
+
+    Keyboard Events:
     - Only the first and last screenshots are kept for consecutive key presses
     - Intermediate screenshots are automatically deleted
     - A keyboard session ends after `keyboard_timeout` seconds of inactivity
-
-    Window tracking:
-    - Use `track_window` parameter to dynamically follow a specific window
-    - The capture region automatically updates when the window moves or resizes
-    - Use `list_available_windows()` to see available window names
-    - Example: Screen(track_window="Google Chrome")
     """
 
     _CAPTURE_FPS: int = 5  # Lower FPS to reduce CPU/memory usage
@@ -428,12 +462,9 @@ class Screen(Observer):
         self._track_window = track_window  # Keep for backward compatibility
         self._tracked_windows: List[
             dict
-        ] = []  # List of {"id": window_id, "region": {...}}
+        ] = []  # List of {"id": window_id, "region": {...}, "fixed": bool}
         self._current_region_lock = asyncio.Lock()
 
-        # Initialize Google Drive with custom client_secrets path if provided
-        # self.drive = initialize_google_drive(client_secrets_path)
-        # self.gdrive_dir = find_folder_by_name(gdrive_dir, self.drive)
 
         # Set target region from coordinates, window tracking, or mouse selection
         if track_window:
@@ -442,25 +473,59 @@ class Screen(Observer):
             if result is None:
                 raise ValueError(f"Window '{track_window}' not found")
             window_id, region = result
-            self._tracked_windows.append({"id": window_id, "region": region})
+            self._tracked_windows.append({
+                "id": window_id,
+                "region": region,
+                "original_size": (region["width"], region["height"])  # Preserve selection size
+            })
             if self.debug:
                 print(f"Tracking window '{track_window}' (ID: {window_id}): {region}")
         elif target_coordinates:
             # target_coordinates should be (left, top, width, height)
             left, top, width, height = target_coordinates
             region = {"left": left, "top": top, "width": width, "height": height}
-            self._tracked_windows.append({"id": None, "region": region})
+            self._tracked_windows.append({
+                "id": None,
+                "region": region,
+                "original_size": None  # Fixed region, never update
+            })
             if self.debug:
                 print(f"Using target coordinates: {region}")
         else:
             # User selects region(s)/window(s) with mouse
             regions, window_ids = select_region_with_mouse()
+
+            # Convert regions from Quartz coordinates to screen coordinates
+            _, _, _, gmax_y = _get_global_bounds()
             for region, window_id in zip(regions, window_ids):
-                self._tracked_windows.append({"id": window_id, "region": region})
+                # Skip zero-sized regions (created by clicks without drag)
+                if region["width"] == 0 or region["height"] == 0:
+                    if self.debug:
+                        print(f"Skipping zero-sized region: {region}")
+                    continue
+
+                # Regions from select_region_with_mouse are in Quartz coords
+                # Convert to screen coords for consistent comparison
+                quartz_top = region["top"]
+                height = region["height"]
+                screen_top = gmax_y - quartz_top - height
+
+                screen_region = {
+                    "left": region["left"],
+                    "top": int(screen_top),
+                    "width": region["width"],
+                    "height": height
+                }
+
+                self._tracked_windows.append({
+                    "id": window_id,
+                    "region": screen_region,
+                    "original_size": (region["width"], region["height"]) if window_id else None
+                })
                 if window_id is not None:
-                    print(f"Tracking selected window (ID: {window_id}): {region}")
+                    print(f"Tracking selected window (ID: {window_id}): {screen_region}")
                 else:
-                    print(f"Using fixed region: {region}")
+                    print(f"Using fixed region: {screen_region}")
 
             print(f"\nTotal windows/regions selected: {len(self._tracked_windows)}")
 
@@ -521,40 +586,79 @@ class Screen(Observer):
                 return idx
         return None
 
+    @staticmethod
+    def _screen_to_mss_coords(screen_region: dict) -> dict:
+        """Convert screen coordinates to mss/Quartz coordinates.
+
+        Parameters
+        ----------
+        screen_region : dict
+            {'left': x, 'top': y, 'width': w, 'height': h} with Y=0 at top
+
+        Returns
+        -------
+        dict
+            {'left': x, 'top': y, 'width': w, 'height': h} with Y=0 at bottom (Quartz)
+
+        Note
+        ----
+        On macOS, mss.grab() expects Quartz coordinates (Y=0 at bottom).
+        """
+        _, _, _, gmax_y = _get_global_bounds()
+        return {
+            "left": screen_region["left"],
+            "top": int(gmax_y - screen_region["top"] - screen_region["height"]),
+            "width": screen_region["width"],
+            "height": screen_region["height"]
+        }
+
     async def _update_tracked_regions(self) -> None:
         """
         Update the capture regions for all tracked windows.
+
+        For windows with original_size, we preserve the selection dimensions
+        but update the position to follow window movement.
         """
         if self.debug:
             print("Checking window bounds update…")
 
         async with self._current_region_lock:
             for tracked in self._tracked_windows:
-                if (
-                    tracked["id"] is not None
-                ):  # Only update tracked windows (not fixed regions)
-                    new_region = await self._run_in_thread(
-                        _get_window_bounds_by_id, tracked["id"]
-                    )
-                    if new_region:
-                        old_region = tracked["region"]
-                        tracked["region"] = new_region
-                        # Log if region changed significantly
-                        if self.debug and old_region:
-                            if (
-                                abs(old_region["left"] - new_region["left"]) > 10
-                                or abs(old_region["top"] - new_region["top"]) > 10
-                                or abs(old_region["width"] - new_region["width"]) > 10
-                                or abs(old_region["height"] - new_region["height"]) > 10
-                            ):
-                                logging.getLogger("Screen").info(
-                                    f"Window (ID: {tracked['id']}) moved/resized: {new_region}"
-                                )
-                    else:
-                        if self.debug:
-                            logging.getLogger("Screen").warning(
-                                f"Tracked window (ID: {tracked['id']}) not found"
+                # Skip manually drawn regions (no window ID)
+                if tracked["id"] is None:
+                    continue
+
+                # For tracked windows, update position but preserve original dimensions
+                new_region = await self._run_in_thread(
+                    _get_window_bounds_by_id, tracked["id"]
+                )
+                if new_region:
+                    old_region = tracked["region"]
+                    original_width, original_height = tracked.get("original_size", (new_region["width"], new_region["height"]))
+
+                    # Update position but keep original dimensions from selection
+                    updated_region = {
+                        "left": new_region["left"],
+                        "top": new_region["top"],
+                        "width": original_width,
+                        "height": original_height
+                    }
+                    tracked["region"] = updated_region
+
+                    # Log if position changed significantly
+                    if self.debug and old_region:
+                        if (
+                            abs(old_region["left"] - updated_region["left"]) > 10
+                            or abs(old_region["top"] - updated_region["top"]) > 10
+                        ):
+                            logging.getLogger("Screen").info(
+                                f"Window (ID: {tracked['id']}) moved: {updated_region}"
                             )
+                else:
+                    if self.debug:
+                        logging.getLogger("Screen").warning(
+                            f"Tracked window (ID: {tracked['id']}) not found"
+                        )
 
     def _is_point_in_region(self, x: float, y: float, region: dict) -> bool:
         """Check if a point (in global coordinates) is inside a region."""
@@ -566,25 +670,25 @@ class Screen(Observer):
     def _get_topmost_window_at_point(self, x: float, y: float) -> Optional[int]:
         """Get the window ID of the topmost window at the given point.
 
+        Parameters:
+        - x, y: Screen coordinates (Y=0 at top)
+
         Returns the CGWindowNumber of the topmost window at (x, y), or None if none found.
         """
         import Quartz
 
-        # Get all on-screen windows at this point
-        opts = (
-            Quartz.kCGWindowListOptionOnScreenOnly
-            | Quartz.kCGWindowListExcludeDesktopElements
-        )
+        # Get ALL on-screen windows in front-to-back Z-order
+        opts = Quartz.kCGWindowListOptionOnScreenOnly
         wins = Quartz.CGWindowListCopyWindowInfo(opts, Quartz.kCGNullWindowID)
 
         if not wins:
             return None
 
-        # Calculate global max_y for coordinate conversion
+        # Convert screen Y to Quartz Y for comparison with window bounds
         _, _, _, gmax_y = _get_global_bounds()
         quartz_y = gmax_y - y
 
-        # Find first window at this point (topmost in Z-order)
+        # Find topmost non-system window at this point
         for win in wins:
             bounds = win.get("kCGWindowBounds", {})
             if not bounds:
@@ -600,7 +704,15 @@ class Screen(Observer):
             # Check if point is within this window
             if wx <= x <= wx + ww and wy <= quartz_y <= wy + wh:
                 window_id = win.get("kCGWindowNumber")
-                return window_id
+                owner = win.get("kCGWindowOwnerName", "Unknown")
+                layer = win.get("kCGWindowLayer", 0)
+
+                # Skip system UI elements
+                is_menubar = layer == Quartz.CGWindowLevelForKey(Quartz.kCGMainMenuWindowLevelKey)
+                is_system = owner in ("Dock", "WindowServer", "Window Server")
+
+                if not is_system and not is_menubar:
+                    return window_id
 
         return None
 
@@ -609,19 +721,23 @@ class Screen(Observer):
 
         Returns the tracked window dict {"id": ..., "region": ...} or None if not found.
 
-        IMPORTANT: For tracked windows (not manual regions), this also verifies
-        that the tracked window is actually the topmost window at this point.
+        For tracked windows (not manual regions), this also verifies that the tracked
+        window is actually the topmost window at this point.
         """
         for tracked in self._tracked_windows:
             if self._is_point_in_region(x, y, tracked["region"]):
                 # If this is a tracked window (has window_id), verify it's topmost
                 if tracked["id"] is not None:
                     topmost_id = self._get_topmost_window_at_point(x, y)
+
                     if topmost_id != tracked["id"]:
                         # Tracked window is not topmost - ignore this interaction
                         if self.debug:
-                            print(f"Interaction at ({x:.1f}, {y:.1f}): tracked window {tracked['id']} not topmost (topmost: {topmost_id})")
+                            logging.getLogger("Screen").info(
+                                f"Skipping interaction at ({x:.1f}, {y:.1f}) - tracked window not on top"
+                            )
                         continue
+
                 # Point is in region and (if tracked) window is topmost
                 return tracked
         return None
@@ -839,9 +955,6 @@ class Screen(Observer):
         del draw
         del image
 
-        # upload to google drive and delete local file
-        # if self.gdrive_dir is not None:
-        #     await asyncio.to_thread(upload_file, path, self.gdrive_dir, self.drive)
         return path
 
     async def _process_and_emit(
@@ -1023,8 +1136,10 @@ class Screen(Observer):
                         )
                     return
 
+                # Convert screen coordinates to mss coordinates
+                mss_rect = self._screen_to_mss_coords(mon_rect)
                 try:
-                    aft = await self._run_in_thread(sct.grab, mon_rect)
+                    aft = await self._run_in_thread(sct.grab, mss_rect)
                 except Exception as e:
                     if self.debug:
                         logging.getLogger("Screen").error(
@@ -1054,12 +1169,16 @@ class Screen(Observer):
 
             # ---- mouse event reception ----
             async def _handle_mouse_event(x: float, y: float, typ: str):
+                # Convert pynput coordinates (Cocoa, Y from bottom) to screen coordinates (Y from top)
+                _, _, _, gmax_y = await self._run_in_thread(_get_global_bounds)
+                screen_y = gmax_y - y
+
                 # Check if point is in any of our tracked windows/regions
-                tracked = self._find_region_for_point(x, y)
+                tracked = self._find_region_for_point(x, screen_y)
                 if tracked is None:
                     if self.debug:
                         log.info(
-                            f"{typ:<6} @({x:7.1f},{y:7.1f}) outside tracked window(s), skipping"
+                            f"{typ:<6} @({x:7.1f},{screen_y:7.1f}) outside tracked window(s), skipping"
                         )
                     return
 
@@ -1069,12 +1188,14 @@ class Screen(Observer):
 
                 mon = tracked["region"]
                 rel_x = x - mon["left"]
-                rel_y = y - mon["top"]
+                rel_y = screen_y - mon["top"]
                 idx = self._tracked_windows.index(tracked) + 1  # 1-indexed for display
 
                 # Grab FRESH "before" frame using current window rect
+                # Convert screen coordinates to mss coordinates
+                mss_mon = self._screen_to_mss_coords(mon)
                 try:
-                    bf = await self._run_in_thread(sct.grab, mon)
+                    bf = await self._run_in_thread(sct.grab, mss_mon)
                 except Exception as e:
                     if self.debug:
                         log.error(f"Failed to capture before frame: {e}")
@@ -1105,8 +1226,12 @@ class Screen(Observer):
                 # Get current mouse position to determine active window
                 x, y = mouse.Controller().position
 
+                # Convert pynput coordinates (Cocoa, Y from bottom) to screen coordinates (Y from top)
+                _, _, _, gmax_y = await self._run_in_thread(_get_global_bounds)
+                screen_y = gmax_y - y
+
                 # Check if point is in any of our tracked windows/regions
-                tracked = self._find_region_for_point(x, y)
+                tracked = self._find_region_for_point(x, screen_y)
                 if tracked is None:
                     if self.debug:
                         log.info(
@@ -1120,12 +1245,14 @@ class Screen(Observer):
 
                 mon = tracked["region"]
                 rel_x = x - mon["left"]
-                rel_y = y - mon["top"]
+                rel_y = screen_y - mon["top"]
                 idx = self._tracked_windows.index(tracked) + 1  # 1-indexed for display
 
                 # Grab FRESH frame using current window rect
+                # Convert screen coordinates to mss coordinates
+                mss_mon = self._screen_to_mss_coords(mon)
                 try:
-                    frame = await self._run_in_thread(sct.grab, mon)
+                    frame = await self._run_in_thread(sct.grab, mss_mon)
                 except Exception as e:
                     if self.debug:
                         log.error(f"Failed to capture keyboard frame: {e}")
@@ -1178,19 +1305,23 @@ class Screen(Observer):
 
             # ---- scroll event reception ----
             async def _handle_scroll_event(x: float, y: float, dx: float, dy: float):
+                # Convert pynput coordinates (Cocoa, Y from bottom) to screen coordinates (Y from top)
+                _, _, _, gmax_y = await self._run_in_thread(_get_global_bounds)
+                screen_y = gmax_y - y
+
                 # Apply scroll filtering
                 async with self._scroll_lock:
-                    if not self._should_log_scroll(x, y, dx, dy):
+                    if not self._should_log_scroll(x, screen_y, dx, dy):
                         if self.debug:
                             log.info(f"Scroll filtered out: dx={dx:.2f}, dy={dy:.2f}")
                         return
 
                 # Check if point is in any of our tracked windows/regions
-                tracked = self._find_region_for_point(x, y)
+                tracked = self._find_region_for_point(x, screen_y)
                 if tracked is None:
                     if self.debug:
                         log.info(
-                            f"Scroll @({x:7.1f},{y:7.1f}) outside tracked window(s), skipping"
+                            f"Scroll @({x:7.1f},{screen_y:7.1f}) outside tracked window(s), skipping"
                         )
                     return
 
@@ -1200,12 +1331,14 @@ class Screen(Observer):
 
                 mon = tracked["region"]
                 rel_x = x - mon["left"]
-                rel_y = y - mon["top"]
+                rel_y = screen_y - mon["top"]
                 idx = self._tracked_windows.index(tracked) + 1  # 1-indexed for display
 
                 # Grab FRESH "before" frame using current window rect
+                # Convert screen coordinates to mss coordinates
+                mss_mon = self._screen_to_mss_coords(mon)
                 try:
-                    bf = await self._run_in_thread(sct.grab, mon)
+                    bf = await self._run_in_thread(sct.grab, mss_mon)
                 except Exception as e:
                     if self.debug:
                         log.error(f"Failed to capture before frame: {e}")
@@ -1343,6 +1476,3 @@ class Screen(Observer):
                     except OSError:
                         pass
                     await self._cleanup_key_screenshots()
-
-            # if self._debounce_handle:
-            #     self._debounce_handle.cancel()

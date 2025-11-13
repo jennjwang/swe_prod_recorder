@@ -176,6 +176,9 @@ class SelectionView(AppKit.NSView):
                 print(
                     f"✓ Added window to selection (total: {len(self.selected_windows)})"
                 )
+                print(f"  Window bounds: left={window_info['left']}, top={window_info['top']}, "
+                      f"width={window_info['width']}, height={window_info['height']}")
+                print(f"  Bottom edge at: {window_info['top'] + window_info['height']}")
                 print("  → Click DONE button or double-click empty area")
 
             self.highlighted_window = None
@@ -203,6 +206,14 @@ class SelectionView(AppKit.NSView):
         left, top = min(x0, x1), min(y0, y1)
         width, height = abs(x1 - x0), abs(y1 - y0)
 
+        # Skip if no actual drag occurred (width or height is 0)
+        if width == 0 or height == 0:
+            print(f"No region drawn (width={width}, height={height}), ignoring.")
+            self.start = None
+            self.end = None
+            self.setNeedsDisplay_(True)
+            return
+
         screen = AppKit.NSScreen.mainScreen().frame()
         top = screen.size.height - top - height  # Flip Y
 
@@ -214,7 +225,7 @@ class SelectionView(AppKit.NSView):
             "height": int(height),
         }
         self.selected_windows.append(manual_region)
-        print(f"Added manual region to selection (total: {len(self.selected_windows)})")
+        print(f"Added manual region to selection: {width}x{height} (total: {len(self.selected_windows)})")
 
         # Reset drag state
         self.start = None
