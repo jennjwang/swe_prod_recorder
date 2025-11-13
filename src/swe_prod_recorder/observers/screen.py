@@ -497,6 +497,14 @@ class Screen(Observer):
 
             # Convert regions from Quartz coordinates to screen coordinates
             _, _, _, gmax_y = _get_global_bounds()
+
+            # Get screen dimensions to detect fullscreen selections
+            import mss
+            with mss.mss() as sct:
+                screen_bounds = sct.monitors[1]  # Primary monitor
+                screen_width = screen_bounds["width"]
+                screen_height = screen_bounds["height"]
+
             for region, window_id in zip(regions, window_ids):
                 # Skip zero-sized regions (created by clicks without drag)
                 if region["width"] == 0 or region["height"] == 0:
@@ -517,13 +525,25 @@ class Screen(Observer):
                     "height": height
                 }
 
+                # If this is a fullscreen selection, treat it as a fixed region (no window tracking)
+                # This prevents issues with Desktop/Wallpaper windows not being topmost
+                is_fullscreen = (
+                    region["width"] >= screen_width * 0.95 and
+                    region["height"] >= screen_height * 0.95
+                )
+
+                effective_window_id = None if is_fullscreen else window_id
+
                 self._tracked_windows.append({
-                    "id": window_id,
+                    "id": effective_window_id,
                     "region": screen_region,
-                    "original_size": (region["width"], region["height"]) if window_id else None
+                    "original_size": (region["width"], region["height"]) if effective_window_id else None
                 })
-                if window_id is not None:
-                    print(f"Tracking selected window (ID: {window_id}): {screen_region}")
+
+                if is_fullscreen:
+                    print(f"Using fullscreen region (no window tracking): {screen_region}")
+                elif effective_window_id is not None:
+                    print(f"Tracking selected window (ID: {effective_window_id}): {screen_region}")
                 else:
                     print(f"Using fixed region: {screen_region}")
 

@@ -60,11 +60,13 @@ class SelectionView(AppKit.NSView):
     def keyDown_(self, event):
         global _selected_regions, _selected_window_ids
         keyCode = event.keyCode()
-        print(f"Key pressed: keyCode={keyCode}")
+        modifiers = event.modifierFlags()
+        print(f"Key pressed: keyCode={keyCode}, modifiers={modifiers}")
 
-        # ESC = cancel
-        if keyCode == 53:  # kVK_Escape
-            print("ESC pressed - cancelling")
+        # ESC or Ctrl+C = cancel
+        is_ctrl_c = keyCode == 8 and (modifiers & AppKit.NSEventModifierFlagControl)
+        if keyCode == 53 or is_ctrl_c:  # kVK_Escape or Ctrl+C
+            print("ESC/Ctrl+C pressed - cancelling")
             _selected_regions = []
             _selected_window_ids = []
             self.window().orderOut_(None)
@@ -346,7 +348,7 @@ class SelectionView(AppKit.NSView):
         )
 
         # Draw instruction text
-        text_str = "Click windows to toggle  •  Press F for fullscreen  •  Press ESC to cancel"
+        text_str = "Click windows to toggle  •  Press F for fullscreen  •  Press ESC or Ctrl+C to cancel"
         text = AppKit.NSString.stringWithString_(text_str)
         attrs = {
             AppKit.NSFontAttributeName: AppKit.NSFont.systemFontOfSize_(14),
@@ -464,7 +466,25 @@ def select_region_with_mouse() -> tuple[list[dict], list[int | None]]:
     _selected_window_ids = []
 
     app = AppKit.NSApplication.sharedApplication()
-    rect = AppKit.NSScreen.mainScreen().frame()
+
+    # Use the screen where the active window is, not necessarily the main screen
+    # This allows selection in fullscreen spaces
+    active_screen = AppKit.NSScreen.mainScreen()
+    active_window = app.keyWindow() or app.mainWindow()
+    if active_window:
+        # Get the screen that contains the active window
+        window_frame = active_window.frame()
+        for screen in AppKit.NSScreen.screens():
+            screen_frame = screen.frame()
+            # Check if window center is on this screen
+            window_center_x = window_frame.origin.x + window_frame.size.width / 2
+            window_center_y = window_frame.origin.y + window_frame.size.height / 2
+            if (screen_frame.origin.x <= window_center_x <= screen_frame.origin.x + screen_frame.size.width and
+                screen_frame.origin.y <= window_center_y <= screen_frame.origin.y + screen_frame.size.height):
+                active_screen = screen
+                break
+
+    rect = active_screen.frame()
     content_rect = AppKit.NSMakeRect(
         rect.origin.x, rect.origin.y, rect.size.width, rect.size.height
     )
@@ -484,7 +504,12 @@ def select_region_with_mouse() -> tuple[list[dict], list[int | None]]:
     window.setAcceptsMouseMovedEvents_(True)
     window.setHidesOnDeactivate_(False)
     try:
-        window.setCollectionBehavior_(AppKit.NSWindowCollectionBehaviorCanJoinAllSpaces)
+        # Use MoveToActiveSpace to stay in the current space (including fullscreen)
+        # instead of CanJoinAllSpaces which can cause space switching
+        window.setCollectionBehavior_(
+            AppKit.NSWindowCollectionBehaviorMoveToActiveSpace |
+            AppKit.NSWindowCollectionBehaviorFullScreenAuxiliary
+        )
     except Exception:
         pass
 
@@ -493,18 +518,14 @@ def select_region_with_mouse() -> tuple[list[dict], list[int | None]]:
     view.setAutoresizingMask_(AppKit.NSViewWidthSizable | AppKit.NSViewHeightSizable)
     window.setContentView_(view)
 
-    # Make window key and active
-    window.makeKeyAndOrderFront_(None)
-    window.orderFrontRegardless()
-    app.activateIgnoringOtherApps_(True)
+    # Order front without activating the app (which would switch spaces)
+    window.orderFront_(None)
 
     # Give the window system time to process
     NSRunLoop.currentRunLoop().runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(0.1))
 
-    # Force the window to become key
+    # Now make it key and active WITHOUT activating the app
     window.makeKeyWindow()
-
-    # Set up first responder
     window.makeFirstResponder_(view)
     window.setInitialFirstResponder_(view)
 
@@ -515,7 +536,7 @@ def select_region_with_mouse() -> tuple[list[dict], list[int | None]]:
     print("2. Click selected windows again to DESELECT them")
     print("3. Press F to select the FULL SCREEN")
     print("4. Click the green DONE button at top-right to confirm")
-    print("5. Press ESC to cancel")
+    print("5. Press ESC or Ctrl+C to cancel")
     print("=" * 70 + "\n")
 
     AppKit.NSCursor.crosshairCursor().push()
