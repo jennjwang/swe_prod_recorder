@@ -23,22 +23,20 @@ dependencies = [
   "mss",
   "pynput",
   "shapely",
-  # Search and analysis
-  "scikit-learn",
-  "numpy",
-  # Optional: macOS-specific dependencies
+  # macOS-specific dependencies
   "pyobjc-core; sys_platform == 'darwin'",
   "pyobjc-framework-Quartz; sys_platform == 'darwin'",
   "pyobjc-framework-Cocoa; sys_platform == 'darwin'",
-  # Optional: Linux-specific dependencies
+  # Linux-specific dependencies
   "PyQt5>=5.15.0; sys_platform == 'linux'",
 ]
 
 [project.optional-dependencies]
 gdrive = [
-  # Optional: Google Drive integration
+  # Google Drive integration
   "PyDrive",
   "PyYAML",
+  "python-dotenv",  # For .env file support in auto-generating client_secrets.json
 ]
 
 [project.scripts]
