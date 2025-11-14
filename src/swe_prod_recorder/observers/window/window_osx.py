@@ -190,13 +190,12 @@ class SelectionView(AppKit.NSView):
 
         # Only primary monitor shows DONE button
         if self.is_primary:
-            # Check if clicking the DONE button (top-right area of banner)
-            banner_height = 60
-            screen_height = self.bounds().size.height
-            button_width = 120
-            button_height = 40
-            button_x = self.bounds().size.width - button_width - 20
-            button_y = screen_height - banner_height + 10
+            # Check if clicking the DONE button (within bottom banner)
+            banner_height = 80
+            button_width = 160
+            button_height = 50
+            button_x = self.bounds().size.width - button_width - 30
+            button_y = (banner_height - button_height) / 2  # Bottom banner, vertically centered
 
             if (
                 button_x <= location.x <= button_x + button_width
@@ -397,22 +396,22 @@ class SelectionView(AppKit.NSView):
     def drawRect_(self, _):
         # Only draw banner and button on primary monitor
         if self.is_primary:
-            # Draw instruction banner at top
-            banner_height = 60
+            # Draw instruction banner at bottom
+            banner_height = 80
             banner_rect = AppKit.NSMakeRect(
                 0,
-                self.bounds().size.height - banner_height,
+                0,  # Bottom of screen
                 self.bounds().size.width,
                 banner_height,
             )
             AppKit.NSColor.colorWithCalibratedWhite_alpha_(0, 0.8).set()
             AppKit.NSBezierPath.fillRect_(banner_rect)
 
-            # Draw DONE button (top-right)
-            button_width = 120
-            button_height = 40
-            button_x = self.bounds().size.width - button_width - 20
-            button_y = self.bounds().size.height - banner_height + 10
+            # Draw DONE button (within bottom banner, right side)
+            button_width = 160
+            button_height = 50
+            button_x = self.bounds().size.width - button_width - 30
+            button_y = (banner_height - button_height) / 2  # Vertically centered in banner
 
             button_rect = AppKit.NSMakeRect(button_x, button_y, button_width, button_height)
             button_path = AppKit.NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
@@ -436,7 +435,7 @@ class SelectionView(AppKit.NSView):
             # Draw DONE text
             done_text = AppKit.NSString.stringWithString_("DONE")
             done_attrs = {
-                AppKit.NSFontAttributeName: AppKit.NSFont.boldSystemFontOfSize_(18),
+                AppKit.NSFontAttributeName: AppKit.NSFont.boldSystemFontOfSize_(20),
                 AppKit.NSForegroundColorAttributeName: AppKit.NSColor.whiteColor(),
             }
             done_size = done_text.sizeWithAttributes_(done_attrs)
@@ -446,7 +445,7 @@ class SelectionView(AppKit.NSView):
                 AppKit.NSMakePoint(done_x, done_y), done_attrs
             )
 
-            # Draw instruction text
+            # Draw instruction text (in bottom banner, left side)
             text_str = "Click windows to toggle  •  Press ESC or Ctrl+C to cancel"
             text = AppKit.NSString.stringWithString_(text_str)
             attrs = {
@@ -455,11 +454,7 @@ class SelectionView(AppKit.NSView):
             }
             text_size = text.sizeWithAttributes_(attrs)
             text_x = 20  # Left-aligned
-            text_y = (
-                self.bounds().size.height
-                - banner_height
-                + (banner_height - text_size.height) / 2
-            )
+            text_y = (banner_height - text_size.height) / 2  # Vertically centered in bottom banner
             text.drawAtPoint_withAttributes_(AppKit.NSMakePoint(text_x, text_y), attrs)
 
         # Calculate max_y once for coordinate conversions
@@ -676,7 +671,7 @@ def select_region_with_mouse() -> tuple[list[dict], list[int | None]]:
     print("=" * 70)
     print("1. Click on windows to SELECT them (they turn GREEN)")
     print("2. Click selected windows again to DESELECT them")
-    print("3. Click the green DONE button (on primary monitor) to confirm")
+    print("3. Click the green DONE button (in bottom banner on primary monitor) to confirm")
     print("4. Press ENTER to confirm or ESC/Ctrl+C to cancel")
     print("=" * 70 + "\n")
 
