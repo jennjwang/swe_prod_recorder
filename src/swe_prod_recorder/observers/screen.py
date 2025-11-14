@@ -270,13 +270,38 @@ def _get_window_by_name(window_name: str) -> Optional[tuple[int, dict]]:
     return None
 
 
+def _window_exists(window_id: int) -> bool:
+    """Check if a window exists (even if not visible/on-screen).
+
+    Returns
+    -------
+    bool
+        True if window exists (open, minimized, or on different Space), False if closed
+    """
+    import Quartz
+
+    # Query ALL windows, not just on-screen ones
+    opts = Quartz.kCGWindowListOptionAll
+    wins = Quartz.CGWindowListCopyWindowInfo(opts, Quartz.kCGNullWindowID)
+
+    if not wins:
+        return False
+
+    for info in wins:
+        wid = info.get("kCGWindowNumber")
+        if wid == window_id:
+            return True
+    return False
+
+
 def _get_window_bounds_by_id(window_id: int) -> Optional[dict]:
-    """Get window bounds by window ID.
+    """Get window bounds by window ID (only for visible on-screen windows).
 
     Returns
     -------
     dict or None
-        Bounds in screen coordinates (Y=0 at top)
+        Bounds in screen coordinates (Y=0 at top) if window is visible on current screen/Space,
+        None if window is minimized, on different Space, or closed.
         {'left': x, 'top': y, 'width': w, 'height': h}
     """
     import Quartz
@@ -630,22 +655,48 @@ class Screen(Observer):
             "height": screen_region["height"]
         }
 
-    async def _update_tracked_regions(self) -> None:
+    async def _update_tracked_regions(self) -> bool:
         """
         Update the capture regions for all tracked windows.
+
+        Returns
+        -------
+        bool
+            True if at least one tracked window is still open, False if all are closed
         """
 
         async with self._current_region_lock:
+            any_window_open = False
+
             for tracked in self._tracked_windows:
-                # Skip manually drawn regions (no window ID)
+                # Skip manually drawn regions (no window ID) - they're always "open"
                 if tracked["id"] is None:
+                    any_window_open = True
                     continue
 
-                # For tracked windows, get current window bounds
+                # First check if window exists at all (closed vs minimized/hidden)
+                window_exists = await self._run_in_thread(
+                    _window_exists, tracked["id"]
+                )
+
+                if not window_exists:
+                    # Window is actually closed - mark as closed
+                    tracked["region"] = None
+                    logging.getLogger("Screen").warning(
+                        f"Tracked window (ID: {tracked['id']}) closed - removed from tracking"
+                    )
+                    continue
+
+                # Window exists but may not be visible (minimized, different Space, etc.)
+                any_window_open = True
+
+                # Try to get visible bounds
                 new_region = await self._run_in_thread(
                     _get_window_bounds_by_id, tracked["id"]
                 )
+
                 if new_region:
+                    # Window is visible - update its bounds
                     original_width, original_height = tracked.get("original_size", (new_region["width"], new_region["height"]))
 
                     updated_region = {
@@ -656,31 +707,21 @@ class Screen(Observer):
                     }
                     # Update original_size to the new dimensions
                     tracked["original_size"] = (new_region["width"], new_region["height"])
+                    tracked["region"] = updated_region
 
-                    logging.getLogger("Screen").info(
-                        f"Window (ID: {tracked['id']}) resized: {original_width}x{original_height} -> {new_region['width']}x{new_region['height']}"
-                    )
-                else:
-                    # Update position but keep original dimensions from selection
-                    updated_region = {
-                        "left": new_region["left"],
-                        "top": new_region["top"],
-                        "width": original_width,
-                        "height": original_height
-                    }
-
-                tracked["region"] = updated_region
-
-                # Log if position changed significantly
-                if self.debug and updated_region:
+                    if self.debug:
                         logging.getLogger("Screen").info(
-                            f"Window (ID: {tracked['id']}) changed: {updated_region}"
+                            f"Window (ID: {tracked['id']}) updated: {original_width}x{original_height} -> {new_region['width']}x{new_region['height']}"
                         )
-            else:
-                if self.debug:
-                    logging.getLogger("Screen").warning(
-                        f"Tracked window (ID: {tracked['id']}) not found"
-                    )
+                else:
+                    # Window exists but not currently visible (minimized, different Space)
+                    # Keep the last known region so we can still check if clicks are in bounds
+                    if self.debug:
+                        logging.getLogger("Screen").info(
+                            f"Tracked window (ID: {tracked['id']}) exists but not visible (minimized or different Space)"
+                        )
+
+            return any_window_open
 
     def _is_point_in_region(self, x: float, y: float, region: dict) -> bool:
         """Check if a point (in global coordinates) is inside a region."""
@@ -1431,12 +1472,26 @@ class Screen(Observer):
                             )
                             print(f"{'=' * 70}\n")
                             self._running = False
+                            # Stop listeners to exit the main thread
+                            self.stop_listeners_sync()
                             break
 
                 # For tracked windows, update regions periodically
                 # We capture frames at event time (not periodic)
                 if self._tracked_windows:
-                    await self._update_tracked_regions()
+                    any_window_open = await self._update_tracked_regions()
+
+                    # Stop recording if all tracked windows are closed
+                    if not any_window_open:
+                        log.info("All tracked windows closed - stopping recording")
+                        print(f"\n{'=' * 70}")
+                        print("All tracked windows have been closed")
+                        print(f"{'=' * 70}\n")
+                        # Stop listeners to exit the main thread
+                        self.stop_listeners_sync()
+                        self._running = False
+                        break
+
                     if (
                         self.debug and frame_count % 30 == 0
                     ):  # Log every 30 frames to avoid spam
