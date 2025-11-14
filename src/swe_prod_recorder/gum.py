@@ -69,6 +69,9 @@ class gum:
 
     async def __aenter__(self):
         await self.connect_db()
+        # Start all observers
+        for obs in self.observers:
+            obs.start()
         self.start_update_loop()
         return self
 

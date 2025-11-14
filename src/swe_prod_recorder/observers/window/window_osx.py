@@ -135,11 +135,13 @@ class SelectionView(AppKit.NSView):
     def keyDown_(self, event):
         global _selected_regions, _selected_window_ids, _selection_confirmed, _selection_cancelled
         keyCode = event.keyCode()
-        print(f"Key pressed: keyCode={keyCode}")
+        modifiers = event.modifierFlags()
+        print(f"Key pressed: keyCode={keyCode}, modifiers={modifiers}")
 
-        # ESC = cancel
-        if keyCode == 53:  # kVK_Escape
-            print("ESC pressed - cancelling")
+        # ESC or Ctrl+C = cancel
+        is_ctrl_c = keyCode == 8 and (modifiers & AppKit.NSEventModifierFlagControl)
+        if keyCode == 53 or is_ctrl_c:  # kVK_Escape or Ctrl+C
+            print("ESC/Ctrl+C pressed - cancelling")
             _selected_regions = []
             _selected_window_ids = []
             _selection_cancelled = True
@@ -188,13 +190,12 @@ class SelectionView(AppKit.NSView):
 
         # Only primary monitor shows DONE button
         if self.is_primary:
-            # Check if clicking the DONE button (top-right area of banner)
-            banner_height = 60
-            screen_height = self.bounds().size.height
-            button_width = 120
-            button_height = 40
-            button_x = self.bounds().size.width - button_width - 20
-            button_y = screen_height - banner_height + 10
+            # Check if clicking the DONE button (within bottom banner)
+            banner_height = 80
+            button_width = 160
+            button_height = 50
+            button_x = self.bounds().size.width - button_width - 30
+            button_y = (banner_height - button_height) / 2  # Bottom banner, vertically centered
 
             if (
                 button_x <= location.x <= button_x + button_width
@@ -253,6 +254,9 @@ class SelectionView(AppKit.NSView):
                 print(
                     f"✓ Added window to selection (total: {len(_shared_selected_windows)})"
                 )
+                print(f"  Window bounds: left={window_info['left']}, top={window_info['top']}, "
+                      f"width={window_info['width']}, height={window_info['height']}")
+                print(f"  Bottom edge at: {window_info['top'] + window_info['height']}")
                 print("  → Click DONE button or double-click empty area")
 
             self.highlighted_window = None
@@ -282,6 +286,14 @@ class SelectionView(AppKit.NSView):
         left, top = min(x0, x1), min(y0, y1)
         width, height = abs(x1 - x0), abs(y1 - y0)
 
+        # Skip if no actual drag occurred (width or height is 0)
+        if width == 0 or height == 0:
+            print(f"No region drawn (width={width}, height={height}), ignoring.")
+            self.start = None
+            self.end = None
+            self.setNeedsDisplay_(True)
+            return
+
         window_frame = self.window().frame()
         global_left = window_frame.origin.x + left
         global_bottom = window_frame.origin.y + top
@@ -299,7 +311,7 @@ class SelectionView(AppKit.NSView):
             "height": int(height),
         }
         _shared_selected_windows.append(manual_region)
-        print(f"Added manual region to selection (total: {len(_shared_selected_windows)})")
+        print(f"Added manual region to selection: {width}x{height} (total: {len(_shared_selected_windows)})")
 
         # Reset drag state
         self.start = None
@@ -384,22 +396,22 @@ class SelectionView(AppKit.NSView):
     def drawRect_(self, _):
         # Only draw banner and button on primary monitor
         if self.is_primary:
-            # Draw instruction banner at top
-            banner_height = 60
+            # Draw instruction banner at bottom
+            banner_height = 80
             banner_rect = AppKit.NSMakeRect(
                 0,
-                self.bounds().size.height - banner_height,
+                0,  # Bottom of screen
                 self.bounds().size.width,
                 banner_height,
             )
             AppKit.NSColor.colorWithCalibratedWhite_alpha_(0, 0.8).set()
             AppKit.NSBezierPath.fillRect_(banner_rect)
 
-            # Draw DONE button (top-right)
-            button_width = 120
-            button_height = 40
-            button_x = self.bounds().size.width - button_width - 20
-            button_y = self.bounds().size.height - banner_height + 10
+            # Draw DONE button (within bottom banner, right side)
+            button_width = 160
+            button_height = 50
+            button_x = self.bounds().size.width - button_width - 30
+            button_y = (banner_height - button_height) / 2  # Vertically centered in banner
 
             button_rect = AppKit.NSMakeRect(button_x, button_y, button_width, button_height)
             button_path = AppKit.NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
@@ -423,7 +435,7 @@ class SelectionView(AppKit.NSView):
             # Draw DONE text
             done_text = AppKit.NSString.stringWithString_("DONE")
             done_attrs = {
-                AppKit.NSFontAttributeName: AppKit.NSFont.boldSystemFontOfSize_(18),
+                AppKit.NSFontAttributeName: AppKit.NSFont.boldSystemFontOfSize_(20),
                 AppKit.NSForegroundColorAttributeName: AppKit.NSColor.whiteColor(),
             }
             done_size = done_text.sizeWithAttributes_(done_attrs)
@@ -433,8 +445,8 @@ class SelectionView(AppKit.NSView):
                 AppKit.NSMakePoint(done_x, done_y), done_attrs
             )
 
-            # Draw instruction text
-            text_str = "Click windows to toggle selection  •  Click again to deselect"
+            # Draw instruction text (in bottom banner, left side)
+            text_str = "Click windows to toggle  •  Press ESC or Ctrl+C to cancel"
             text = AppKit.NSString.stringWithString_(text_str)
             attrs = {
                 AppKit.NSFontAttributeName: AppKit.NSFont.systemFontOfSize_(14),
@@ -442,11 +454,7 @@ class SelectionView(AppKit.NSView):
             }
             text_size = text.sizeWithAttributes_(attrs)
             text_x = 20  # Left-aligned
-            text_y = (
-                self.bounds().size.height
-                - banner_height
-                + (banner_height - text_size.height) / 2
-            )
+            text_y = (banner_height - text_size.height) / 2  # Vertically centered in bottom banner
             text.drawAtPoint_withAttributes_(AppKit.NSMakePoint(text_x, text_y), attrs)
 
         # Calculate max_y once for coordinate conversions
@@ -622,6 +630,7 @@ def select_region_with_mouse() -> tuple[list[dict], list[int | None]]:
 
         # Set collection behavior
         try:
+            # Use CanJoinAllSpaces + FullScreenAuxiliary to appear in all Spaces including fullscreen
             behavior = (AppKit.NSWindowCollectionBehaviorCanJoinAllSpaces |
                        AppKit.NSWindowCollectionBehaviorFullScreenAuxiliary |
                        AppKit.NSWindowCollectionBehaviorStationary)
@@ -662,8 +671,8 @@ def select_region_with_mouse() -> tuple[list[dict], list[int | None]]:
     print("=" * 70)
     print("1. Click on windows to SELECT them (they turn GREEN)")
     print("2. Click selected windows again to DESELECT them")
-    print("3. Click the green DONE button (on primary monitor) to confirm")
-    print("4. Press ENTER to confirm or ESC to cancel")
+    print("3. Click the green DONE button (in bottom banner on primary monitor) to confirm")
+    print("4. Press ENTER to confirm or ESC/Ctrl+C to cancel")
     print("=" * 70 + "\n")
 
     AppKit.NSCursor.crosshairCursor().push()

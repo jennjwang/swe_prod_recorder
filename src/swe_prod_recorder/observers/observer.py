@@ -12,7 +12,12 @@ class Observer(ABC):
 
         # running flag + background task handle
         self._running = True
-        self._task: asyncio.Task | None = asyncio.create_task(self._worker_wrapper())
+        self._task: asyncio.Task | None = None
+
+    def start(self) -> None:
+        """Start the observer worker task."""
+        if self._task is None:
+            self._task = asyncio.create_task(self._worker_wrapper())
 
     # ─────────────────────────────── abstract worker
     @abstractmethod
