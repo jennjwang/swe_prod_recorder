@@ -31,31 +31,17 @@ The project pairs a command-line facilitator (`cli.py`) with an asynchronous obs
 
 ### Installation
 
-Install them into a virtual environment with [uv](https://docs.astral.sh/uv/#installation) venv **(recommended)**:
+Install them into a conda environment **(recommended)**:
 
 ```bash
-uv venv --python 3.11
-source .venv/bin/activate
-uv sync
-```
-
-or using a Python standard library venv virtual environment:
-
-```bash
-python3.11 -m venv .venv
-source .venv/bin/activate
+conda create -n recorder python=3.11
+conda activate recorder
 pip install -e .
 ```
 
 ### Google Drive upload (optional)
 
-To additionally install the `gdrive` extra with uv:
-
-```bash
-uv sync --extra gdrive
-```
-
-or with pip:
+To additionally install the `gdrive` extra:
 
 ```bash
 pip install -e ".[gdrive]"

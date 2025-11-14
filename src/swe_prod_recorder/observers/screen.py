@@ -532,18 +532,16 @@ class Screen(Observer):
                     region["height"] >= screen_height * 0.95
                 )
 
-                effective_window_id = None if is_fullscreen else window_id
-
                 self._tracked_windows.append({
-                    "id": effective_window_id,
+                    "id": window_id,
                     "region": screen_region,
-                    "original_size": (region["width"], region["height"]) if effective_window_id else None
+                    "original_size": (region["width"], region["height"]) if window_id else None
                 })
 
-                if is_fullscreen:
+                if is_fullscreen and not window_id:
                     print(f"Using fullscreen region (no window tracking): {screen_region}")
-                elif effective_window_id is not None:
-                    print(f"Tracking selected window (ID: {effective_window_id}): {screen_region}")
+                elif window_id is not None:
+                    print(f"Tracking selected window (ID: {window_id}): {screen_region}")
                 else:
                     print(f"Using fixed region: {screen_region}")
 
@@ -635,12 +633,7 @@ class Screen(Observer):
     async def _update_tracked_regions(self) -> None:
         """
         Update the capture regions for all tracked windows.
-
-        For windows with original_size, we preserve the selection dimensions
-        but update the position to follow window movement.
         """
-        if self.debug:
-            print("Checking window bounds update…")
 
         async with self._current_region_lock:
             for tracked in self._tracked_windows:
@@ -648,14 +641,26 @@ class Screen(Observer):
                 if tracked["id"] is None:
                     continue
 
-                # For tracked windows, update position but preserve original dimensions
+                # For tracked windows, get current window bounds
                 new_region = await self._run_in_thread(
                     _get_window_bounds_by_id, tracked["id"]
                 )
                 if new_region:
-                    old_region = tracked["region"]
                     original_width, original_height = tracked.get("original_size", (new_region["width"], new_region["height"]))
 
+                    updated_region = {
+                        "left": new_region["left"],
+                        "top": new_region["top"],
+                        "width": new_region["width"],
+                        "height": new_region["height"]
+                    }
+                    # Update original_size to the new dimensions
+                    tracked["original_size"] = (new_region["width"], new_region["height"])
+
+                    logging.getLogger("Screen").info(
+                        f"Window (ID: {tracked['id']}) resized: {original_width}x{original_height} -> {new_region['width']}x{new_region['height']}"
+                    )
+                else:
                     # Update position but keep original dimensions from selection
                     updated_region = {
                         "left": new_region["left"],
@@ -663,22 +668,19 @@ class Screen(Observer):
                         "width": original_width,
                         "height": original_height
                     }
-                    tracked["region"] = updated_region
 
-                    # Log if position changed significantly
-                    if self.debug and old_region:
-                        if (
-                            abs(old_region["left"] - updated_region["left"]) > 10
-                            or abs(old_region["top"] - updated_region["top"]) > 10
-                        ):
-                            logging.getLogger("Screen").info(
-                                f"Window (ID: {tracked['id']}) moved: {updated_region}"
-                            )
-                else:
-                    if self.debug:
-                        logging.getLogger("Screen").warning(
-                            f"Tracked window (ID: {tracked['id']}) not found"
+                tracked["region"] = updated_region
+
+                # Log if position changed significantly
+                if self.debug and updated_region:
+                        logging.getLogger("Screen").info(
+                            f"Window (ID: {tracked['id']}) changed: {updated_region}"
                         )
+            else:
+                if self.debug:
+                    logging.getLogger("Screen").warning(
+                        f"Tracked window (ID: {tracked['id']}) not found"
+                    )
 
     def _is_point_in_region(self, x: float, y: float, region: dict) -> bool:
         """Check if a point (in global coordinates) is inside a region."""
