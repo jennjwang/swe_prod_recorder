@@ -231,45 +231,6 @@ def _get_visible_windows() -> List[tuple[dict, float]]:
     return result
 
 
-def _get_window_by_name(window_name: str) -> Optional[tuple[int, dict]]:
-    """Get window ID and bounds by owner name.
-
-    Returns
-    -------
-    tuple[int, dict] or None
-        (window_id, bounds_dict) where bounds are in screen coordinates (Y=0 at top)
-        {'left': x, 'top': y, 'width': w, 'height': h}
-    """
-    import Quartz
-
-    _, _, _, gmax_y = _get_global_bounds()
-
-    opts = (
-        Quartz.kCGWindowListOptionOnScreenOnly
-        | Quartz.kCGWindowListOptionIncludingWindow
-    )
-    wins = Quartz.CGWindowListCopyWindowInfo(opts, Quartz.kCGNullWindowID)
-
-    for info in wins:
-        owner = info.get("kCGWindowOwnerName", "")
-        if owner == window_name:
-            window_id = info.get("kCGWindowNumber")
-            if window_id is None:
-                continue
-
-            bounds = info.get("kCGWindowBounds", {})
-            x = int(bounds.get("X", 0))
-            y = int(bounds.get("Y", 0))
-            w = int(bounds.get("Width", 0))
-            h = int(bounds.get("Height", 0))
-            if w > 0 and h > 0:
-                # Flip Y coordinate from Quartz (bottom-left origin) to screen (top-left origin)
-                top = int(gmax_y - y - h)
-                bounds_dict = {"left": x, "top": top, "width": w, "height": h}
-                return (window_id, bounds_dict)
-    return None
-
-
 def _window_exists(window_id: int) -> bool:
     """Check if a window exists (even if not visible/on-screen).
 
@@ -328,34 +289,6 @@ def _get_window_bounds_by_id(window_id: int) -> Optional[dict]:
                 return {"left": x, "top": top, "width": w, "height": h}
     return None
 
-
-def list_available_windows() -> List[str]:
-    """List all available window names that can be tracked.
-
-    Returns a list of window owner names that are currently visible.
-    Excludes system windows like Dock and WindowServer.
-    """
-    import Quartz
-
-    opts = (
-        Quartz.kCGWindowListOptionOnScreenOnly
-        | Quartz.kCGWindowListOptionIncludingWindow
-    )
-    wins = Quartz.CGWindowListCopyWindowInfo(opts, Quartz.kCGNullWindowID)
-
-    window_names = set()
-    for info in wins:
-        owner = info.get("kCGWindowOwnerName", "")
-        if owner and owner not in ("Dock", "WindowServer", "Window Server"):
-            bounds = info.get("kCGWindowBounds", {})
-            w = bounds.get("Width", 0)
-            h = bounds.get("Height", 0)
-            if w > 0 and h > 0:
-                window_names.add(owner)
-
-    return sorted(window_names)
-
-
 def _is_app_visible(names: Iterable[str]) -> bool:
     """Return *True* if **any** window from *names* is at least partially visible."""
     targets = set(names)
@@ -363,7 +296,6 @@ def _is_app_visible(names: Iterable[str]) -> bool:
         info.get("kCGWindowOwnerName", "") in targets and ratio > 0
         for info, ratio in _get_visible_windows()
     )
-
 
 ###############################################################################
 # Screen observer                                                             #
@@ -386,11 +318,12 @@ class Screen(Observer):
     - Quartz → screen: screen_top = gmax_y - quartz_y - height
 
     Window Tracking:
-    - Use `track_window` parameter to dynamically follow a specific window
+    - Use `record_all_screens=True` to record all monitors/screens (no window selection needed)
+    - Use `track_window_id` parameter to dynamically follow a specific window by ID
+    - Use `list_available_windows()` to see available windows (returns list of dicts with 'id', 'name', 'title')
     - The capture region automatically updates when the window moves
     - Window dimensions from selection are preserved (handles Electron apps)
-    - Use `list_available_windows()` to see available window names
-    - Example: Screen(track_window="Google Chrome")
+    - Examples: Screen(record_all_screens=True) or Screen(track_window_id=12345)
 
     Keyboard Events:
     - Only the first and last screenshots are kept for consecutive key presses
@@ -428,7 +361,8 @@ class Screen(Observer):
         scroll_session_timeout: float = 2.0,
         upload_to_gdrive: bool = False,
         target_coordinates: Optional[tuple[int, int, int, int]] = None,
-        track_window: Optional[str] = None,
+        track_window_id: Optional[int] = None,
+        record_all_screens: bool = False,
         inactivity_timeout: float = 45 * 60,  # 45 minutes in seconds
         start_listeners_on_main_thread: bool = False,  # macOS: run listeners on main thread
     ) -> None:
@@ -484,7 +418,7 @@ class Screen(Observer):
         self._inactivity_lock = asyncio.Lock()
 
         # Window tracking configuration (support for multiple windows)
-        self._track_window = track_window  # Keep for backward compatibility
+        self._track_window_id = track_window_id
         self._tracked_windows: List[
             dict
         ] = []  # List of {"id": window_id, "region": {...}, "fixed": bool}
@@ -492,19 +426,47 @@ class Screen(Observer):
 
 
         # Set target region from coordinates, window tracking, or mouse selection
-        if track_window:
-            # Will track window dynamically - get initial bounds and window ID
-            result = _get_window_by_name(track_window)
-            if result is None:
-                raise ValueError(f"Window '{track_window}' not found")
-            window_id, region = result
+        if record_all_screens:
+            # Record all monitors/screens
+            import mss
+            with mss.mss() as sct:
+                # Convert regions from Quartz coordinates to screen coordinates
+                _, _, _, gmax_y = _get_global_bounds()
+
+                # Iterate through all monitors (skip monitor 0 which is all monitors combined)
+                for i, monitor in enumerate(sct.monitors[1:], 1):
+                    # mss uses Quartz coords (Y=0 at bottom), need to convert to screen coords (Y=0 at top)
+                    mss_top = monitor["top"]
+                    mss_height = monitor["height"]
+                    screen_top = gmax_y - mss_top - mss_height
+
+                    region = {
+                        "left": monitor["left"],
+                        "top": int(screen_top),
+                        "width": monitor["width"],
+                        "height": monitor["height"]
+                    }
+                    self._tracked_windows.append({
+                        "id": None,  # No window tracking for full screen recording
+                        "region": region,
+                        "original_size": None  # Fixed region, never update
+                    })
+                    if self.debug:
+                        print(f"Recording full screen - Monitor {i}: {region}")
+
+            print(f"Recording all {len(self._tracked_windows)} monitor(s)")
+        elif track_window_id:
+            # Track window by ID
+            region = _get_window_bounds_by_id(track_window_id)
+            if region is None:
+                raise ValueError(f"Window with ID {track_window_id} not found")
             self._tracked_windows.append({
-                "id": window_id,
+                "id": track_window_id,
                 "region": region,
                 "original_size": (region["width"], region["height"])  # Preserve selection size
             })
             if self.debug:
-                print(f"Tracking window '{track_window}' (ID: {window_id}): {region}")
+                print(f"Tracking window by ID {track_window_id}: {region}")
         elif target_coordinates:
             # target_coordinates should be (left, top, width, height)
             left, top, width, height = target_coordinates

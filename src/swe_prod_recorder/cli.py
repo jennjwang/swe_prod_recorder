@@ -73,6 +73,13 @@ def parse_args():
         help="Directory to save screenshots (default: data/screenshots)",
     )
 
+    # Recording mode
+    parser.add_argument(
+        "--record-all-screens",
+        action="store_true",
+        help="Record all monitors/screens (no window selection needed)",
+    )
+
     # Inactivity timeout
     parser.add_argument(
         "--inactivity-timeout",
@@ -122,14 +129,20 @@ def main():
     print("\nPlease make sure your workspace is clean and contains only")
     print("study-related materials.")
     print("\nClose all personal tabs, folders, and unrelated applications.")
-    print("\nOnly the window you select will be recorded — activity outside")
-    print("it will be ignored.")
+
+    if args.record_all_screens:
+        print("\nALL monitors/screens will be recorded — everything on screen")
+        print("will be captured.")
+    else:
+        print("\nOnly the window you select will be recorded — activity outside")
+        print("it will be ignored.")
+
     print("\nYou can pause or stop recording at any time using Ctrl + C")
     print("in the terminal.")
     print(
         f"\nRecording will automatically stop after {args.inactivity_timeout} minutes"
     )
-    print("of inactivity in the selected window.")
+    print("of inactivity.")
     print("\nWhen finished, review your recording and delete anything you")
     print("don't want to share.")
     print("\n" + "=" * 70)
@@ -146,6 +159,7 @@ def main():
         scroll_max_frequency=args.scroll_max_frequency,
         scroll_session_timeout=args.scroll_session_timeout,
         upload_to_gdrive=args.upload_to_gdrive,
+        record_all_screens=args.record_all_screens,
         inactivity_timeout=args.inactivity_timeout * 60,
         start_listeners_on_main_thread=True,  # macOS-safe mode
     )

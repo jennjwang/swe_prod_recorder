@@ -63,6 +63,7 @@ usage: swe-prod-recorder [-h] [--user-name USER_NAME] [--debug]
                          [--scroll-session-timeout SCROLL_SESSION_TIMEOUT]
                          [--upload-to-gdrive]
                          [--screenshots-dir SCREENSHOTS_DIR]
+                         [--record-all-screens]
                          [--inactivity-timeout INACTIVITY_TIMEOUT]
 
 SWE Productivity Recorder - Screen activity recorder for software engineer
@@ -87,6 +88,8 @@ options:
   --screenshots-dir SCREENSHOTS_DIR
                         Directory to save screenshots (default:
                         data/screenshots)
+  --record-all-screens  Record all monitors/screens (no window selection
+                        needed)
   --inactivity-timeout INACTIVITY_TIMEOUT
                         Stop recording after N minutes of inactivity (default:
                         45)
@@ -99,10 +102,14 @@ options:
 3. Launch the recorder:
 
 ```bash
+# Select specific windows (default)
 python -m recorder --user-name alice
+
+# Or record all monitors/screens
+python -m recorder --user-name alice --record-all-screens
 ```
 
-4. Read the on-screen safety reminders, press Enter to continue, then use the overlay to select one or more windows/regions.
+4. Read the on-screen safety reminders, press Enter to continue. If `--record-all-screens` is not set, use the overlay to select one or more windows/regions.
 5. The recorder runs until you press `Ctrl+C` or it detects the configured inactivity timeout. Data lands in `data/actions.db`, and screenshots default to `data/screenshots/`.
 
 ### CLI Options
@@ -110,6 +117,7 @@ python -m recorder --user-name alice
 - `--user-name/-u` – Tag all observations with a participant identifier (default: `anonymous`).
 - `--debug/-d` – Verbose logging and extra console diagnostics.
 - `--screenshots-dir` – Target folder for captured PNGs (default: `data/screenshots`).
+- `--record-all-screens` – Record all monitors/screens without window selection. When enabled, captures everything on all displays.
 - `--upload-to-gdrive` – Upload screenshots to Drive instead of keeping them locally. Requires a `client_secrets.json` and consent flow (see below).
 - Scroll filtering knobs: `--scroll-debounce`, `--scroll-min-distance`, `--scroll-max-frequency`, `--scroll-session-timeout`.
 - `--inactivity-timeout` – Minutes of inactivity before auto-stop (default: 45).
