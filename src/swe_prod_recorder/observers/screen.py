@@ -37,14 +37,6 @@ from typing import Any, Dict, Iterable, List, Optional
 import mss
 from PIL import Image, ImageDraw
 
-try:
-    # Optional dependencies
-    from pydrive.auth import GoogleAuth
-    from pydrive.drive import GoogleDrive
-except ImportError:
-    USE_GDRIVE = False
-else:
-    USE_GDRIVE = True
 from pynput import keyboard, mouse  # still synchronous
 from shapely.geometry import box
 from shapely.ops import unary_union
@@ -52,105 +44,13 @@ from shapely.ops import unary_union
 from ..schemas import Update
 from .observer import Observer
 from .window import select_region_with_mouse
-
-
-def initialize_google_drive(client_secrets_path: str = None) -> GoogleDrive:
-    """
-    Initialize Google Drive authentication with optional custom client_secrets.json path.
-
-    Parameters
-    ----------
-    client_secrets_path : str, optional
-        Path to the client_secrets.json file. If None, uses default location.
-
-    Returns
-    -------
-    GoogleDrive
-        Authenticated Google Drive client
-    """
-    gauth = GoogleAuth()
-
-    if client_secrets_path:
-        # Expand user path and get absolute path
-        client_secrets_path = os.path.abspath(os.path.expanduser(client_secrets_path))
-
-        # Verify the file exists
-        if not os.path.exists(client_secrets_path):
-            raise FileNotFoundError(
-                f"Client secrets file not found: {client_secrets_path}"
-            )
-
-        # Copy the client_secrets.json to current directory temporarily
-        import shutil
-
-        temp_client_secrets = "client_secrets.json"
-
-        try:
-            shutil.copy2(client_secrets_path, temp_client_secrets)
-            print(f"✅ Copied client_secrets.json to current directory")
-
-            # Use default behavior (PyDrive will find client_secrets.json in current directory)
-            gauth.LocalWebserverAuth()  # Opens browser for first-time authentication
-
-        finally:
-            # Clean up temporary file
-            try:
-                os.remove(temp_client_secrets)
-                print(f"✅ Cleaned up temporary client_secrets.json")
-            except OSError:
-                pass  # File might already be deleted
-    else:
-        # Use default behavior (looks for client_secrets.json in current directory)
-        gauth.LocalWebserverAuth()  # Opens browser for first-time authentication
-
-    return GoogleDrive(gauth)
-
-
-# Initialize with default behavior (looks for client_secrets.json in current directory)
-# drive = initialize_google_drive()
-
-
-def list_folders(drive: GoogleDrive):
-    """List all folders in Google Drive to help find folder IDs"""
-    folders = drive.ListFile(
-        {"q": "mimeType='application/vnd.google-apps.folder' and trashed=false"}
-    ).GetList()
-    print("Available folders:")
-    for folder in folders:
-        print(f"Name: {folder['title']}, ID: {folder['id']}")
-    return folders
-
-
-def find_folder_by_name(folder_name: str, drive: GoogleDrive):
-    """Find a folder by name and return its ID"""
-    folders = drive.ListFile(
-        {
-            "q": f"mimeType='application/vnd.google-apps.folder' and title='{folder_name}' and trashed=false"
-        }
-    ).GetList()
-    if folders:
-        return folders[0]["id"]
-    return None
-
-
-def upload_file(path: str, drive_dir: str, drive_instance: GoogleDrive):
-    """Upload a file to Google Drive and delete the local file.
-
-    Parameters
-    ----------
-    path : str
-        Path to the file to upload
-    drive_dir : str
-        Google Drive folder ID to upload to
-    drive_instance : GoogleDrive
-        Google Drive client instance.
-    """
-    upload_file = drive_instance.CreateFile(
-        {"title": path.split("/")[-1], "parents": [{"id": drive_dir}]}
-    )
-    upload_file.SetContentFile(path)
-    upload_file.Upload()
-    os.remove(path)
+# Re-export Google Drive helpers for callers that still import from screen.
+from ..auth.google_drive import (  # noqa: F401
+    USE_GDRIVE,
+    find_folder_by_name,
+    initialize_google_drive,
+    upload_file,
+)
 
 
 ###############################################################################
@@ -326,18 +226,17 @@ class Screen(Observer):
     - Examples: Screen(record_all_screens=True) or Screen(track_window_id=12345)
 
     Keyboard Events:
-    - Only the first and last screenshots are kept for consecutive key presses
-    - Intermediate screenshots are automatically deleted
+    - All screenshots are kept for consecutive key presses
     - A keyboard session ends after `keyboard_timeout` seconds of inactivity
     """
 
-    _CAPTURE_FPS: int = 5  # Lower FPS to reduce CPU/memory usage
+    _CAPTURE_FPS: int = 3  # Lower FPS to reduce CPU/memory usage
     _PERIODIC_SEC: int = 30
     _DEBOUNCE_SEC: int = 1
     _MON_START: int = 1  # first real display in mss
     _MEMORY_CLEANUP_INTERVAL: int = 10  # More frequent GC to prevent memory buildup
     _MAX_WORKERS: int = 4  # Limit thread pool size to prevent exhaustion
-    _MAX_SCREENSHOT_AGE: int = 3600  # Delete screenshots older than 1 hour (in seconds)
+    _MAX_SCREENSHOT_AGE: int = None 
 
     # Scroll filtering constants
     _SCROLL_DEBOUNCE_SEC: float = 0.8  # Minimum time between scroll events
@@ -348,13 +247,13 @@ class Screen(Observer):
     # ─────────────────────────────── construction
     def __init__(
         self,
-        screenshots_dir: str = "~/Downloads/records/screenshots",
+        screenshots_dir: str = "data/screenshots",
         skip_when_visible: Optional[str | list[str]] = None,
         history_k: int = 10,
         debug: bool = False,
         keyboard_timeout: float = 2.0,
-        gdrive_dir: str = "screenshots",
-        client_secrets_path: str = "~/Desktop/client_secrets.json",
+        gdrive_dir: str = "swe-productivity-screenshots",
+        client_secrets_path: str | None = "config/.google_auth/client_secrets.json",
         scroll_debounce_sec: float = 0.5,
         scroll_min_distance: float = 5.0,
         scroll_max_frequency: int = 10,
@@ -374,9 +273,23 @@ class Screen(Observer):
             if isinstance(skip_when_visible, str)
             else set(skip_when_visible or [])
         )
-        self.upload_to_gdrive = upload_to_gdrive
-
         self.debug = debug
+        self.upload_to_gdrive = upload_to_gdrive
+        self._client_secrets_path = client_secrets_path
+        self._gdrive_dir = gdrive_dir
+        self._drive_client = None
+        self._drive_folder_id: Optional[str] = None
+        self._gdrive_tasks: set[asyncio.Task] = set()
+        self._gdrive_setup_failed = False
+
+        if self.upload_to_gdrive:
+            if not USE_GDRIVE:
+                raise RuntimeError(
+                    "Google Drive upload requested but PyDrive is not installed. "
+                    "Install PyDrive to enable this feature."
+                )
+            # Google Drive initialization will be done lazily on first upload
+            # to allow credential caching and avoid repeated auth prompts
 
         # Custom thread pool to prevent exhaustion
         self._thread_pool = ThreadPoolExecutor(max_workers=self._MAX_WORKERS)
@@ -580,16 +493,6 @@ class Screen(Observer):
                 logging.getLogger("Screen").info(
                     "High-DPI display detected, using conservative settings"
                 )
-
-    @staticmethod
-    def _mon_for(x: float, y: float, mons: list[dict]) -> Optional[int]:
-        for idx, m in enumerate(mons, 1):
-            if (
-                m["left"] <= x < m["left"] + m["width"]
-                and m["top"] <= y < m["top"] + m["height"]
-            ):
-                return idx
-        return None
 
     @staticmethod
     def _screen_to_mss_coords(screen_region: dict) -> dict:
@@ -845,54 +748,118 @@ class Screen(Observer):
         return True
 
     async def _cleanup_key_screenshots(self) -> None:
-        """Clean up intermediate keyboard screenshots, keeping only first and last."""
-        if len(self._key_screenshots) <= 2:
-            return
+        """Clean up intermediate keyboard screenshots, keeping only first and last.
 
-        # Keep first and last, delete the rest
-        to_delete = self._key_screenshots[1:-1]
-        self._key_screenshots = [self._key_screenshots[0], self._key_screenshots[-1]]
-
-        for path in to_delete:
-            try:
-                await self._run_in_thread(os.remove, path)
-                if self.debug:
-                    logging.getLogger("Screen").info(
-                        f"Deleted intermediate screenshot: {path}"
-                    )
-            except OSError:
-                pass  # File might already be deleted
+        NOTE: Cleanup is disabled - all screenshots are kept.
+        """
+        # Pruning disabled - keep all screenshots
+        return
 
     async def _cleanup_old_screenshots(self) -> None:
-        """Delete screenshots older than _MAX_SCREENSHOT_AGE to prevent disk space issues."""
-        try:
-            current_time = time.time()
-            deleted_count = 0
+        """Delete screenshots older than _MAX_SCREENSHOT_AGE to prevent disk space issues.
 
-            for filename in await self._run_in_thread(os.listdir, self.screens_dir):
-                filepath = os.path.join(self.screens_dir, filename)
-                if not filename.endswith(".jpg"):
-                    continue
-
-                try:
-                    file_age = current_time - await self._run_in_thread(
-                        os.path.getmtime, filepath
-                    )
-                    if file_age > self._MAX_SCREENSHOT_AGE:
-                        await self._run_in_thread(os.remove, filepath)
-                        deleted_count += 1
-                except OSError:
-                    pass  # File might have been deleted already
-
-            if deleted_count > 0 and self.debug:
-                logging.getLogger("Screen").info(
-                    f"Cleaned up {deleted_count} old screenshots"
-                )
-        except Exception as e:
-            if self.debug:
-                logging.getLogger("Screen").error(f"Error cleaning up screenshots: {e}")
+        NOTE: Cleanup is disabled (_MAX_SCREENSHOT_AGE is None) - all screenshots are kept.
+        """
+        # Pruning disabled - keep all screenshots
+        return
 
     # ─────────────────────────────── I/O helpers
+    def _initialize_gdrive_client(self) -> None:
+        """Set up the Google Drive client and ensure the target folder exists."""
+        drive = initialize_google_drive(self._client_secrets_path)
+        folder_id = self._ensure_drive_folder(drive, self._gdrive_dir)
+        self._drive_client = drive
+        self._drive_folder_id = folder_id
+
+    def _ensure_drive_folder(self, drive, folder_spec: str) -> str:
+        """
+        Resolve or create the Google Drive folder used for uploads.
+
+        Parameters
+        ----------
+        drive : GoogleDrive
+            Authenticated PyDrive client.
+        folder_spec : str
+            Folder identifier or name.
+        """
+        if not folder_spec:
+            raise ValueError("Google Drive folder name or ID must be provided.")
+
+        # First, see if the spec is already a valid folder ID.
+        try:
+            folder = drive.CreateFile({"id": folder_spec})
+            folder.FetchMetadata()
+            if folder.get("mimeType") == "application/vnd.google-apps.folder":
+                return folder_spec
+        except Exception:
+            pass
+
+        # Next, try to find by name.
+        folder_id = find_folder_by_name(folder_spec, drive)
+        if folder_id:
+            return folder_id
+
+        # Create the folder if it doesn't exist (one level deep).
+        folder = drive.CreateFile(
+            {
+                "title": folder_spec,
+                "mimeType": "application/vnd.google-apps.folder",
+            }
+        )
+        folder.Upload()
+        if self.debug:
+            logging.getLogger("Screen").info(
+                "Created Google Drive folder '%s' with id %s", folder_spec, folder["id"]
+            )
+        return folder["id"]
+
+    async def _upload_to_drive(self, path: str) -> None:
+        """Upload the given screenshot to Google Drive asynchronously.
+
+        Note: This reuses cached credentials from the initial authentication in cli.py,
+        so it won't prompt for authentication again.
+        """
+        if not self.upload_to_gdrive or self._gdrive_setup_failed:
+            return
+
+        # Lazy initialization of Google Drive client on first upload
+        # This will reuse the cached credentials created during CLI authentication
+        if self._drive_client is None or self._drive_folder_id is None:
+            try:
+                await self._run_in_thread(self._initialize_gdrive_client)
+                if self.debug:
+                    logging.getLogger("Screen").info(
+                        "Google Drive uploads enabled (folder id: %s)",
+                        self._drive_folder_id,
+                    )
+            except Exception as exc:
+                logging.getLogger("Screen").error(
+                    "Failed to initialize Google Drive uploads: %s", exc, exc_info=self.debug
+                )
+                self._gdrive_setup_failed = True
+                return
+
+        if not os.path.exists(path):
+            if self.debug:
+                logging.getLogger("Screen").warning(
+                    "Skipped Google Drive upload; file missing: %s", path
+                )
+            return
+
+        try:
+            await self._run_in_thread(
+                upload_file,
+                path,
+                self._drive_folder_id,
+                self._drive_client,
+                delete_local=True,
+            )
+        except Exception as exc:
+            logging.getLogger("Screen").error(
+                "Failed to upload '%s' to Google Drive: %s", path, exc, exc_info=self.debug
+            )
+            self._gdrive_setup_failed = True
+
     async def _save_frame(
         self,
         frame,
@@ -983,6 +950,11 @@ class Screen(Observer):
         del draw
         del image
 
+        if self.upload_to_gdrive and not self._gdrive_setup_failed:
+            task = asyncio.create_task(self._upload_to_drive(path))
+            task.add_done_callback(lambda t: self._gdrive_tasks.discard(t))
+            self._gdrive_tasks.add(task)
+
         return path
 
     async def _process_and_emit(
@@ -1016,6 +988,10 @@ class Screen(Observer):
             self._frames.clear()
 
         # Force garbage collection
+        if self._gdrive_tasks:
+            await asyncio.gather(*list(self._gdrive_tasks), return_exceptions=True)
+            self._gdrive_tasks.clear()
+
         await self._run_in_thread(gc.collect)
 
         # Shutdown thread pool

@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import os
 import signal
 import sys
 import threading
@@ -29,77 +30,44 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="SWE Productivity Recorder - Screen activity recorder for software engineer productivity research"
     )
-    parser.add_argument(
-        "--user-name", "-u", type=str, default="anonymous", help="The user name to use"
-    )
-    parser.add_argument("--debug", "-d", action="store_true", help="Enable debug mode")
 
-    # Scroll filtering options
-    parser.add_argument(
-        "--scroll-debounce",
-        type=float,
-        default=0.5,
-        help="Minimum time between scroll events (seconds, default: 0.5)",
-    )
-    parser.add_argument(
-        "--scroll-min-distance",
-        type=float,
-        default=5.0,
-        help="Minimum scroll distance to log (pixels, default: 5.0)",
-    )
-    parser.add_argument(
-        "--scroll-max-frequency",
-        type=int,
-        default=10,
-        help="Maximum scroll events per second (default: 10)",
-    )
-    parser.add_argument(
-        "--scroll-session-timeout",
-        type=float,
-        default=2.0,
-        help="Scroll session timeout (seconds, default: 2.0)",
-    )
-
-    # Screenshot storage options
+    # Essential options
     parser.add_argument(
         "--upload-to-gdrive",
         action="store_true",
-        help="Upload screenshots to Google Drive (default: keep local)",
+        help="Upload screenshots to Google Drive and delete local copies",
     )
-    parser.add_argument(
-        "--screenshots-dir",
-        type=str,
-        default="data/screenshots",
-        help="Directory to save screenshots (default: data/screenshots)",
-    )
-
-    # Recording mode
     parser.add_argument(
         "--record-all-screens",
         action="store_true",
         help="Record all monitors/screens (no window selection needed)",
     )
-
-    # Inactivity timeout
     parser.add_argument(
         "--inactivity-timeout",
         type=float,
         default=45,
         help="Stop recording after N minutes of inactivity (default: 45)",
     )
+    parser.add_argument(
+        "--debug",
+        "-d",
+        action="store_true",
+        help="Enable debug logging",
+    )
 
     return parser.parse_args()
 
 
-async def _async_main(args, screen_observer, stop_event):
+async def _async_main(screen_observer, stop_event):
     """Run async event loop in background thread.
 
     This manages the database, observer workers, and update processing.
     """
     data_directory = "data"
+    user_name = "anonymous"  # Default user name
 
     try:
-        async with gum(args.user_name, screen_observer, data_directory=data_directory):
+        async with gum(user_name, screen_observer, data_directory=data_directory):
             # Wait for stop signal
             while not stop_event.is_set():
                 await asyncio.sleep(0.1)
@@ -120,7 +88,44 @@ def main():
     APIs) runs on the main thread, avoiding dispatch queue assertion failures.
     """
     args = parse_args()
-    print(f"User Name: {args.user_name}")
+
+    if args.upload_to_gdrive:
+        try:
+            from .auth.google_drive import (
+                USE_GDRIVE,
+                initialize_google_drive,
+                _generate_client_secrets_from_env,
+            )
+        except ImportError as exc:
+            print(f"Google Drive upload requested but PyDrive is not available: {exc}")
+            sys.exit(1)
+
+        if not USE_GDRIVE:
+            print("Google Drive upload requested but PyDrive is not installed.")
+            sys.exit(1)
+
+        # Try to auto-generate client_secrets.json from .env if it doesn't exist
+        secrets_path = os.path.abspath("config/.google_auth/client_secrets.json")
+        if not os.path.exists(secrets_path):
+            print("client_secrets.json not found, attempting to generate from .env...")
+            if _generate_client_secrets_from_env():
+                print("✅ Generated client_secrets.json from .env")
+            else:
+                print(f"❌ Could not generate client_secrets.json")
+                print("\nPlease either:")
+                print("  1. Create a .env file with GOOGLE_CLIENT_ID, GOOGLE_PROJECT_ID, and GOOGLE_CLIENT_SECRET")
+                print("     (See config/.env.example for template)")
+                print("  2. Or place client_secrets.json manually in config/.google_auth/ directory")
+                sys.exit(1)
+
+        # Authenticate with Google Drive (will use cached credentials if available)
+        print("\nAuthenticating with Google Drive...")
+        try:
+            initialize_google_drive("config/.google_auth/client_secrets.json")
+            print("✅ Google Drive authentication successful")
+        except Exception as exc:
+            print(f"❌ Google Drive authentication failed: {exc}")
+            sys.exit(1)
 
     # Display user warning and instructions
     print("\n" + "=" * 70)
@@ -152,15 +157,10 @@ def main():
 
     # Create screen observer (window selection happens on main thread)
     screen_observer = Screen(
-        screenshots_dir=args.screenshots_dir,
-        debug=args.debug,
-        scroll_debounce_sec=args.scroll_debounce,
-        scroll_min_distance=args.scroll_min_distance,
-        scroll_max_frequency=args.scroll_max_frequency,
-        scroll_session_timeout=args.scroll_session_timeout,
         upload_to_gdrive=args.upload_to_gdrive,
         record_all_screens=args.record_all_screens,
         inactivity_timeout=args.inactivity_timeout * 60,
+        debug=args.debug,
         start_listeners_on_main_thread=True,  # macOS-safe mode
     )
 
@@ -169,7 +169,7 @@ def main():
 
     # Launch asyncio event loop in background thread
     async_thread = threading.Thread(
-        target=lambda: asyncio.run(_async_main(args, screen_observer, stop_event)),
+        target=lambda: asyncio.run(_async_main(screen_observer, stop_event)),
         daemon=True,
         name="AsyncIOThread"
     )

@@ -8,9 +8,9 @@ The project pairs a command-line facilitator (`cli.py`) with an asynchronous obs
 
 - `cli.py` – argument parsing, participant briefing, and lifecycle orchestration.
 - `gum.py` – async context manager that fans in updates from one or more observers and stores them as `observation` rows.
+- `auth/` – authentication modules (Google Drive OAuth).
 - `observers/` – concrete observer implementations. `screen` handles region selection, screenshot capture, scroll tracking, keyboard sessions, and inactivity detection.
 - `models.py` – SQLAlchemy ORM + FTS5 schema for observations and derived propositions, plus async engine/session helpers.
-- `db_utils.py` – helper queries (BM25 + MMR ranking, related observation lookups) for analysis workflows.
 - `schemas.py` – pydantic models describing the JSON update payloads and LLM-facing schemas.
 
 ## Requirements
@@ -22,16 +22,12 @@ The project pairs a command-line facilitator (`cli.py`) with an asynchronous obs
   - Grant these in: System Settings → Privacy & Security
 - Python 3.11 (3.10+ should work, but 3.11 is what the type hints target).
 - Homebrew-installed `sqlite`/`libsqlite3` is recommended for the bundled FTS5 support.
-- Python packages:
-  - `python-dotenv`, `SQLAlchemy[asyncio]`, `aiosqlite`, `pydantic`
-  - `numpy`, `scikit-learn` (for post-processing search utilities)
-  - `mss`, `Pillow`, `shapely`, `pynput`
-  - `pyobjc-framework-Quartz`, `pyobjc-framework-AppKit`, `pyobjc-core` (macOS automation APIs)
-  - `PyDrive` if you plan to upload to Google Drive.
+- Python packages (installed automatically via pip)
+- For Google Drive uploads: Create a `config/.env` file with OAuth credentials (see setup below)
 
 ### Installation
 
-Install them into a conda environment **(recommended)**:
+Install into a conda environment **(recommended)**:
 
 ```bash
 conda create -n recorder python=3.11
@@ -39,13 +35,15 @@ conda activate recorder
 pip install -e .
 ```
 
-### Google Drive upload (optional)
+### Optional Features
 
-To additionally install the `gdrive` extra:
+**Google Drive uploads:**
 
 ```bash
 pip install -e ".[gdrive]"
 ```
+
+Adds: PyDrive, PyYAML, python-dotenv
 
 ## Usage
 
@@ -56,13 +54,8 @@ swe-prod-recorder [OPTIONS]
 ```
 
 ```
-usage: swe-prod-recorder [-h] [--user-name USER_NAME] [--debug]
-                         [--scroll-debounce SCROLL_DEBOUNCE]
-                         [--scroll-min-distance SCROLL_MIN_DISTANCE]
-                         [--scroll-max-frequency SCROLL_MAX_FREQUENCY]
-                         [--scroll-session-timeout SCROLL_SESSION_TIMEOUT]
+usage: swe-prod-recorder [-h]
                          [--upload-to-gdrive]
-                         [--screenshots-dir SCREENSHOTS_DIR]
                          [--record-all-screens]
                          [--inactivity-timeout INACTIVITY_TIMEOUT]
 
@@ -70,36 +63,25 @@ SWE Productivity Recorder - Screen activity recorder for software engineer
 productivity research
 
 options:
-  -h, --help            show this help message and exit
-  --user-name, -u USER_NAME
-                        The user name to use
-  --debug, -d           Enable debug mode
-  --scroll-debounce SCROLL_DEBOUNCE
-                        Minimum time between scroll events (seconds, default:
-                        0.5)
-  --scroll-min-distance SCROLL_MIN_DISTANCE
-                        Minimum scroll distance to log (pixels, default: 5.0)
-  --scroll-max-frequency SCROLL_MAX_FREQUENCY
-                        Maximum scroll events per second (default: 10)
-  --scroll-session-timeout SCROLL_SESSION_TIMEOUT
-                        Scroll session timeout (seconds, default: 2.0)
-  --upload-to-gdrive    Upload screenshots to Google Drive (default: keep
-                        local)
-  --screenshots-dir SCREENSHOTS_DIR
-                        Directory to save screenshots (default:
-                        data/screenshots)
-  --record-all-screens  Record all monitors/screens (no window selection
-                        needed)
+  -h, --help            Show this help message and exit
+  --upload-to-gdrive    Upload screenshots to Google Drive and delete local copies
+  --record-all-screens  Record all monitors/screens (no window selection needed)
   --inactivity-timeout INACTIVITY_TIMEOUT
-                        Stop recording after N minutes of inactivity (default:
-                        45)
+                        Stop recording after N minutes of inactivity (default: 45)
 ```
 
 ## Data Layout
 
-- `data/actions.db` – SQLite database containing the `observations` table and derived `propositions` tables for higher-level analytics. WAL mode is enabled for concurrent reads.
-- `data/screenshots/` – Timestamped PNGs capturing pre/post interaction frames. Files are pruned when keyboard sessions finish or when the hour-long retention window elapses.
-- Optional Google Drive uploads mirror the screenshot filenames in the chosen folder and remove the local copies once the upload succeeds.
+- `config/` – Configuration files
+  - `.env` – Your Google OAuth credentials (you provide this, gitignored)
+  - `.google_auth/` – Auto-generated Google Drive authentication (gitignored)
+    - `client_secrets.json` – Auto-generated from `config/.env`
+    - `credentials.json` – Auto-generated OAuth tokens after authentication
+- `data/` – Runtime data (gitignored)
+  - `actions.db` – SQLite database with observations and propositions (WAL mode enabled)
+  - `screenshots/` – Timestamped screenshots
+    - **Without `--upload-to-gdrive`**: Stored locally and kept permanently
+    - **With `--upload-to-gdrive`**: Uploaded to Google Drive and deleted locally
 
 You can inspect the database with:
 
@@ -107,30 +89,41 @@ You can inspect the database with:
 sqlite3 data/actions.db '.tables'
 ```
 
-`db_utils.py` provides convenience functions for BM25 search (`search_propositions_bm25`) and fetching related observations; import them into your analysis notebooks as needed.
-
 ## Google Drive Uploads
 
-1. Create OAuth credentials in Google Cloud Console and download `client_secrets.json`.
-2. Pass its path via `--upload-to-gdrive` (and optionally tweak `client_secrets_path` inside the observer) so PyDrive can authenticate.
-3. The first run launches a browser for consent. After that, cached credentials let subsequent runs upload silently.
+When using `--upload-to-gdrive`, screenshots are uploaded directly to Google Drive **instead of** being stored locally. This saves local disk space while keeping all recordings securely backed up in the cloud.
 
-Uploads target the folder ID you configure in your integration logic. Review and purge Drive artifacts regularly to honor participant agreements.
+**How it works:**
+
+1. We will provide: `config/.env` file with 3 credentials (CLIENT_ID, PROJECT_ID, CLIENT_SECRET)
+2. Auto-generated: `config/.google_auth/client_secrets.json` created from your `.env` on first run
+3. Auto-generated: `config/.google_auth/credentials.json` created after you authenticate in browser
+4. Screenshots upload to Google Drive and are deleted locally
 
 ## Project Structure
 
 ```
 recorder/
-├── cli.py                # Command-line entry point
-├── gum.py                # Observer manager + database writer
-├── models.py             # SQLAlchemy ORM models and engine helpers
-├── db_utils.py           # Search utilities for captured propositions
-├── observers/
-│   ├── screen.py         # Screenshot + activity observer
-│   ├── window.py         # macOS window selection overlay
-│   └── observer.py       # Abstract base class for observers
-├── schemas.py            # pydantic schemas shared across components
-└── __main__.py           # Allows `python -m recorder` execution
+├── config/
+│   ├── .env.example          # Template for Google OAuth credentials
+│   └── .google_auth/         # Auto-generated (gitignored)
+│       ├── client_secrets.json
+│       └── credentials.json
+├── data/                     # Runtime data (gitignored)
+│   ├── actions.db
+│   └── screenshots/
+├── src/swe_prod_recorder/
+│   ├── cli.py                # Command-line entry point
+│   ├── gum.py                # Observer manager + database writer
+│   ├── models.py             # SQLAlchemy ORM models
+│   ├── schemas.py            # Pydantic schemas
+│   ├── auth/                 # Authentication
+│   │   └── google_drive.py   # Google Drive OAuth
+│   └── observers/            # Recording logic
+│       ├── screen.py         # Main screen observer
+│       ├── window/           # Window selection
+│       └── observer.py       # Base class
+└── pyproject.toml            # Package configuration
 ```
 
 ## Attribution

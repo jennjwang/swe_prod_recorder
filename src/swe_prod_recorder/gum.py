@@ -142,13 +142,3 @@ class gum:
         async with self.Session() as s:
             async with s.begin():
                 yield s
-
-    def add_observer(self, observer: Observer):
-        self.observers.append(observer)
-
-    def remove_observer(self, observer: Observer):
-        if observer in self.observers:
-            self.observers.remove(observer)
-
-    def register_update_handler(self, fn: Callable[[Observer, Update], None]):
-        self.update_handlers.append(fn)
