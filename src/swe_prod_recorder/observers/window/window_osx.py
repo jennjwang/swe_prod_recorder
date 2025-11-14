@@ -191,7 +191,7 @@ class SelectionView(AppKit.NSView):
         # Only primary monitor shows DONE button
         if self.is_primary:
             # Check if clicking the DONE button (within bottom banner)
-            banner_height = 80
+            banner_height = 60
             button_width = 160
             button_height = 50
             button_x = self.bounds().size.width - button_width - 30
@@ -394,69 +394,6 @@ class SelectionView(AppKit.NSView):
         return None
 
     def drawRect_(self, _):
-        # Only draw banner and button on primary monitor
-        if self.is_primary:
-            # Draw instruction banner at bottom
-            banner_height = 80
-            banner_rect = AppKit.NSMakeRect(
-                0,
-                0,  # Bottom of screen
-                self.bounds().size.width,
-                banner_height,
-            )
-            AppKit.NSColor.colorWithCalibratedWhite_alpha_(0, 0.8).set()
-            AppKit.NSBezierPath.fillRect_(banner_rect)
-
-            # Draw DONE button (within bottom banner, right side)
-            button_width = 160
-            button_height = 50
-            button_x = self.bounds().size.width - button_width - 30
-            button_y = (banner_height - button_height) / 2  # Vertically centered in banner
-
-            button_rect = AppKit.NSMakeRect(button_x, button_y, button_width, button_height)
-            button_path = AppKit.NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
-                button_rect, 8, 8
-            )
-
-            if self.selected_windows:
-                # Enabled - green
-                AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
-                    0.2, 0.8, 0.3, 0.9
-                ).setFill()
-            else:
-                # Disabled - gray
-                AppKit.NSColor.colorWithCalibratedWhite_alpha_(0.5, 0.5).setFill()
-
-            button_path.fill()
-            AppKit.NSColor.whiteColor().setStroke()
-            button_path.setLineWidth_(2)
-            button_path.stroke()
-
-            # Draw DONE text
-            done_text = AppKit.NSString.stringWithString_("DONE")
-            done_attrs = {
-                AppKit.NSFontAttributeName: AppKit.NSFont.boldSystemFontOfSize_(20),
-                AppKit.NSForegroundColorAttributeName: AppKit.NSColor.whiteColor(),
-            }
-            done_size = done_text.sizeWithAttributes_(done_attrs)
-            done_x = button_x + (button_width - done_size.width) / 2
-            done_y = button_y + (button_height - done_size.height) / 2
-            done_text.drawAtPoint_withAttributes_(
-                AppKit.NSMakePoint(done_x, done_y), done_attrs
-            )
-
-            # Draw instruction text (in bottom banner, left side)
-            text_str = "Click windows to toggle  •  Press ESC or Ctrl+C to cancel"
-            text = AppKit.NSString.stringWithString_(text_str)
-            attrs = {
-                AppKit.NSFontAttributeName: AppKit.NSFont.systemFontOfSize_(14),
-                AppKit.NSForegroundColorAttributeName: AppKit.NSColor.whiteColor(),
-            }
-            text_size = text.sizeWithAttributes_(attrs)
-            text_x = 20  # Left-aligned
-            text_y = (banner_height - text_size.height) / 2  # Vertically centered in bottom banner
-            text.drawAtPoint_withAttributes_(AppKit.NSMakePoint(text_x, text_y), attrs)
-
         # Calculate max_y once for coordinate conversions
         max_y = 0
         for scr in AppKit.NSScreen.screens():
@@ -565,6 +502,69 @@ class SelectionView(AppKit.NSView):
             ).setStroke()
             path.setLineWidth_(2.0)
             path.stroke()
+
+        # Draw banner and button LAST so they appear on top (only on primary monitor)
+        if self.is_primary:
+            # Draw instruction banner at bottom
+            banner_height = 60
+            banner_rect = AppKit.NSMakeRect(
+                0,
+                0,  # Bottom of screen
+                self.bounds().size.width,
+                banner_height,
+            )
+            AppKit.NSColor.colorWithCalibratedWhite_alpha_(0, 0.7).set()
+            AppKit.NSBezierPath.fillRect_(banner_rect)
+
+            # Draw DONE button (within bottom banner, right side)
+            button_width = 150
+            button_height = 40
+            button_x = self.bounds().size.width - button_width - 30
+            button_y = (banner_height - button_height) / 2  # Vertically centered in banner
+
+            button_rect = AppKit.NSMakeRect(button_x, button_y, button_width, button_height)
+            button_path = AppKit.NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+                button_rect, 8, 8
+            )
+
+            if self.selected_windows:
+                # Enabled - green
+                AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                    0.2, 0.8, 0.3, 1.0
+                ).setFill()
+            else:
+                # Disabled - gray
+                AppKit.NSColor.colorWithCalibratedWhite_alpha_(0.5, 0.8).setFill()
+
+            button_path.fill()
+            AppKit.NSColor.whiteColor().setStroke()
+            button_path.setLineWidth_(2)
+            button_path.stroke()
+
+            # Draw DONE text
+            done_text = AppKit.NSString.stringWithString_("DONE")
+            done_attrs = {
+                AppKit.NSFontAttributeName: AppKit.NSFont.boldSystemFontOfSize_(20),
+                AppKit.NSForegroundColorAttributeName: AppKit.NSColor.whiteColor(),
+            }
+            done_size = done_text.sizeWithAttributes_(done_attrs)
+            done_x = button_x + (button_width - done_size.width) / 2
+            done_y = button_y + (button_height - done_size.height) / 2
+            done_text.drawAtPoint_withAttributes_(
+                AppKit.NSMakePoint(done_x, done_y), done_attrs
+            )
+
+            # Draw instruction text (in bottom banner, left side)
+            text_str = "Click windows to toggle  •  Press ESC or Ctrl+C to cancel"
+            text = AppKit.NSString.stringWithString_(text_str)
+            attrs = {
+                AppKit.NSFontAttributeName: AppKit.NSFont.systemFontOfSize_(14),
+                AppKit.NSForegroundColorAttributeName: AppKit.NSColor.whiteColor(),
+            }
+            text_size = text.sizeWithAttributes_(attrs)
+            text_x = 20  # Left-aligned
+            text_y = (banner_height - text_size.height) / 2  # Vertically centered in bottom banner
+            text.drawAtPoint_withAttributes_(AppKit.NSMakePoint(text_x, text_y), attrs)
 
 
 def select_region_with_mouse() -> tuple[list[dict], list[int | None]]:
