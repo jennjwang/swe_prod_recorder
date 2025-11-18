@@ -1,6 +1,6 @@
 # SWE Productivity Recorder
 
-A macOS screen activity recorder built on top of [gum](https://github.com/GeneralUserModels/gum) (Linux version coming soon!). It guides a participant through selecting the windows they are comfortable sharing, records high-signal screen activity around user interactions, and stores the resulting timeline in a searchable SQLite database.
+A macOS screen activity recorder built on top of [gum](https://github.com/GeneralUserModels/gum) (Linux version coming soon!). It guides a participant through selecting the windows they are comfortable sharing and records high-signal screen activity around user interactions.
 
 The project pairs a command-line facilitator (`cli.py`) with an asynchronous observer framework (`gum.py`) and a `Screen` observer that captures before/after screenshots, keyboard sessions, and mouse events.
 
