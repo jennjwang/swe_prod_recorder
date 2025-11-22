@@ -183,7 +183,6 @@ class SelectionView(AppKit.NSView):
 
     def mouseDown_(self, event):
         """Click adds/removes windows or confirms selection via button"""
-        print(f">>> mouseDown_ called! clickCount={event.clickCount()}")
         global _selected_regions, _selected_window_ids, _selection_confirmed, _shared_selected_windows
 
         location = event.locationInWindow()
@@ -204,7 +203,7 @@ class SelectionView(AppKit.NSView):
                 # Clicked DONE button
                 if self.selected_windows:
                     print(
-                        f"✓ DONE button clicked - confirming {len(self.selected_windows)} window(s)"
+                        f"DONE button clicked - confirming {len(self.selected_windows)} window(s)"
                     )
                     _selected_regions = [w.copy() for w in self.selected_windows]
                     _selected_window_ids = [
@@ -217,7 +216,6 @@ class SelectionView(AppKit.NSView):
                     return
 
         window_info = self._get_window_at_location(location)
-        print(f">>> window_info: {window_info is not None}")
 
         # Double-click on empty area to confirm selection (backup method)
         if event.clickCount() == 2 and window_info is None and not self.start:
@@ -243,7 +241,7 @@ class SelectionView(AppKit.NSView):
                 if w.get("window_id") == window_id:
                     _shared_selected_windows.pop(i)
                     print(
-                        f"✗ Removed window from selection (total: {len(_shared_selected_windows)})"
+                        f"Removed window from selection (total: {len(_shared_selected_windows)})"
                     )
                     already_selected = True
                     break
@@ -252,12 +250,10 @@ class SelectionView(AppKit.NSView):
                 # Add window to selection
                 _shared_selected_windows.append(window_info.copy())
                 print(
-                    f"✓ Added window to selection (total: {len(_shared_selected_windows)})"
+                    f"Added window to selection (total: {len(_shared_selected_windows)})"
                 )
                 print(f"  Window bounds: left={window_info['left']}, top={window_info['top']}, "
                       f"width={window_info['width']}, height={window_info['height']}")
-                print(f"  Bottom edge at: {window_info['top'] + window_info['height']}")
-                print("  → Click DONE button or double-click empty area")
 
             self.highlighted_window = None
             # Refresh all overlay views to show updated selection
@@ -325,7 +321,10 @@ class SelectionView(AppKit.NSView):
             window_frame.origin.x + location.x, window_frame.origin.y + location.y
         )
 
+        # Use kCGWindowListOptionAll to include windows behind the overlay
+        # (important for single-monitor setups where overlay covers everything)
         window_list = Quartz.CGWindowListCopyWindowInfo(
+            # Quartz.kCGWindowListOptionAll
             Quartz.kCGWindowListOptionOnScreenOnly
             | Quartz.kCGWindowListExcludeDesktopElements,
             Quartz.kCGNullWindowID,
@@ -341,12 +340,31 @@ class SelectionView(AppKit.NSView):
         quartz_y = max_y - screen_point.y
 
         # Get screen dimensions for filtering
+        # Use 105% of max screen size to allow for maximized windows while still filtering desktop
         screens = AppKit.NSScreen.screens()
         max_screen_width = max(scr.frame().size.width for scr in screens) if screens else 3840
         max_screen_height = max(scr.frame().size.height for scr in screens) if screens else 2160
 
-        # Find all matching windows and prefer the largest
+        # Add a 10% buffer to account for maximized windows on single monitor setups
+        screen_width_threshold = max_screen_width * 1.1
+        screen_height_threshold = max_screen_height * 1.1
+
+        # # Debug: Print all windows to understand what we're seeing
+        # print(f"\n=== All Windows at Click (first 20) ===")
+        # for i, win in enumerate(window_list[:20]):
+        #     owner = win.get("kCGWindowOwnerName", "Unknown")
+        #     bounds = win.get("kCGWindowBounds", {})
+        #     w_width = bounds.get("Width", 0)
+        #     w_height = bounds.get("Height", 0)
+        #     layer = win.get("kCGWindowLayer", 0)
+        #     onscreen = win.get("kCGWindowIsOnscreen", False)
+        #     wid = win.get("kCGWindowNumber")
+        #     print(f"  [{i}] '{owner}': {w_width:.0f}x{w_height:.0f}, layer={layer}, onscreen={onscreen}, id={wid}")
+        # print("=" * 60 + "\n")
+
+        # Find all matching windows and prefer the first (topmost in Z-order)
         matching_windows = []
+
         for win in window_list:
             bounds = win.get("kCGWindowBounds", {})
             if not bounds:
@@ -359,38 +377,50 @@ class SelectionView(AppKit.NSView):
             )
             layer = win.get("kCGWindowLayer", 0)
             owner_name = win.get("kCGWindowOwnerName", "")
+            window_id = win.get("kCGWindowNumber")
+            is_onscreen = win.get("kCGWindowIsOnscreen", False)
+
+            # Filter out windows that aren't actually visible (ensures correct Z-order)
+            if not is_onscreen:
+                continue
 
             # Filter out system windows
             excluded_owners = {"Dock", "WindowServer", "Window Manager", "Desktop", "Wallpaper"}
             if owner_name in excluded_owners:
                 continue
 
-            # Filter out floating windows and very small windows
-            if layer >= AppKit.NSFloatingWindowLevel or w < 200 or h < 150:
+            # Filter out the overlay window itself (floating level)
+            if layer >= AppKit.NSFloatingWindowLevel:
                 continue
 
-            # Filter out screen-sized windows (desktop containers)
-            # Allow full-screen apps only if they have a legitimate app owner
-            if w >= max_screen_width or h >= max_screen_height:
+            # Filter out very tiny windows (likely not actual app windows)
+            if w < 50 or h < 50:
+                continue
+
+            # Filter out screen-sized windows without legitimate owners (desktop containers)
+            if w >= screen_width_threshold or h >= screen_height_threshold:
                 if not owner_name or owner_name in {"Window Server", "Window Manager", "Finder"}:
                     continue
 
             if x <= screen_point.x <= x + w and y <= quartz_y <= y + h:
-                window_id = win.get("kCGWindowNumber")
                 matching_windows.append({
                     "left": int(x),
                     "top": int(y),
                     "width": int(w),
                     "height": int(h),
                     "window_id": window_id,
+                    "owner_name": owner_name,
                     "area": w * h,
                 })
 
-        # Return the largest matching window to avoid sub-panels
+        # Return the first matching window (topmost in Z-order)
+        # Windows are returned front-to-back, so first match is the visible window
         if matching_windows:
-            largest = max(matching_windows, key=lambda w: w["area"])
-            largest.pop("area")
-            return largest
+            first_match = matching_windows[0]
+            # print(f"SELECTED: '{first_match.get('owner_name')}' (id={first_match.get('window_id')}, {first_match.get('width')}x{first_match.get('height')})")
+            first_match.pop("area")
+            first_match.pop("owner_name")  # Remove before returning
+            return first_match
         return None
 
     def drawRect_(self, _):
@@ -555,7 +585,7 @@ class SelectionView(AppKit.NSView):
             )
 
             # Draw instruction text (in bottom banner, left side)
-            text_str = "Click windows to toggle  •  Press ESC or Ctrl+C to cancel"
+            text_str = "Click windows to toggle  •  Ctrl+C to cancel"
             text = AppKit.NSString.stringWithString_(text_str)
             attrs = {
                 AppKit.NSFontAttributeName: AppKit.NSFont.systemFontOfSize_(14),
@@ -594,24 +624,10 @@ def select_region_with_mouse() -> tuple[list[dict], list[int | None]]:
     # Check if displays have separate spaces (Mission Control setting)
     separate_spaces = AppKit.NSScreen.screensHaveSeparateSpaces()
     screens = AppKit.NSScreen.screens()
-
-    print(f"\n📐 OVERLAY WINDOW CREATION:")
-    print(f"   Displays have separate Spaces: {separate_spaces}")
-    if separate_spaces:
-        print(f"   ✓ Creating separate overlay for each of {len(screens)} monitor(s)")
-    else:
-        print(f"   ℹ️  Creating separate overlays even though Spaces aren't separate")
-        print(f"   ℹ️  This approach works with both settings!")
-
-    # Create one overlay window per monitor
+    
     for i, screen in enumerate(screens):
         screen_frame = screen.frame()
-        is_primary = (i == 0)  # First screen is primary (shows banner/button)
-
-        print(f"   Creating overlay for Monitor {i+1}: "
-              f"x={screen_frame.origin.x}, y={screen_frame.origin.y}, "
-              f"width={screen_frame.size.width}, height={screen_frame.size.height}")
-
+        is_primary = (i == 0)
         # Create overlay window for this screen
         window = OverlayWindow.alloc().initWithContentRect_styleMask_backing_defer_(
             screen_frame,
@@ -650,6 +666,10 @@ def select_region_with_mouse() -> tuple[list[dict], list[int | None]]:
         _all_overlay_windows.append(window)
         _all_overlay_views.append(view)
 
+        # Debug: Print overlay window info
+        overlay_window_num = window.windowNumber()
+        # print(f"   → Overlay window created: id={overlay_window_num}, level={AppKit.NSFloatingWindowLevel}")
+
     # Show all windows
     for window in _all_overlay_windows:
         window.makeKeyAndOrderFront_(None)
@@ -667,7 +687,7 @@ def select_region_with_mouse() -> tuple[list[dict], list[int | None]]:
     NSRunLoop.currentRunLoop().runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(0.1))
 
     print("\n" + "=" * 70)
-    print("MULTI-MONITOR WINDOW SELECTION")
+    print("WINDOW SELECTION")
     print("=" * 70)
     print("1. Click on windows to SELECT them (they turn GREEN)")
     print("2. Click selected windows again to DESELECT them")

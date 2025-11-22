@@ -117,7 +117,7 @@ def _get_visible_windows() -> List[tuple[dict, float]]:
         if w <= 0 or h <= 0:
             continue  # hidden or minimised
 
-        inv_y = gmax_y - y - h  # Quartz→Shapely Y‑flip
+        inv_y = gmax_y - y - h  # Quartz→Shapely Y‑flip (convert top edge)
         poly = box(x, inv_y, x + w, inv_y + h)
         if poly.is_empty:
             continue
@@ -155,15 +155,14 @@ def _window_exists(window_id: int) -> bool:
     return False
 
 
-def _get_window_bounds_by_id(window_id: int) -> Optional[dict]:
-    """Get window bounds by window ID (only for visible on-screen windows).
+def _get_window_bounds_by_id(window_id: int) -> Optional[tuple[dict, str]]:
+    """Get window bounds and owner by window ID (only for visible on-screen windows).
 
     Returns
     -------
-    dict or None
-        Bounds in screen coordinates (Y=0 at top) if window is visible on current screen/Space,
-        None if window is minimized, on different Space, or closed.
-        {'left': x, 'top': y, 'width': w, 'height': h}
+    tuple of (dict, str) or (None, None)
+        (Bounds dict, owner name) if window is visible, (None, None) otherwise.
+        Bounds: {'left': x, 'top': y, 'width': w, 'height': h}
     """
     import Quartz
 
@@ -179,15 +178,17 @@ def _get_window_bounds_by_id(window_id: int) -> Optional[dict]:
         wid = info.get("kCGWindowNumber")
         if wid == window_id:
             bounds = info.get("kCGWindowBounds", {})
+            owner = info.get("kCGWindowOwnerName", "")
             x = int(bounds.get("X", 0))
             y = int(bounds.get("Y", 0))
             w = int(bounds.get("Width", 0))
             h = int(bounds.get("Height", 0))
             if w > 0 and h > 0:
-                # Flip Y coordinate from Quartz (bottom-left origin) to screen (top-left origin)
+                # CGWindowBounds returns Quartz coordinates (Y=0 at bottom)
+                # Convert to screen coordinates (Y=0 at top)
                 top = int(gmax_y - y - h)
-                return {"left": x, "top": top, "width": w, "height": h}
-    return None
+                return {"left": x, "top": top, "width": w, "height": h}, owner
+    return None, None
 
 def _is_app_visible(names: Iterable[str]) -> bool:
     """Return *True* if **any** window from *names* is at least partially visible."""
@@ -265,6 +266,7 @@ class Screen(Observer):
         inactivity_timeout: float = 45 * 60,  # 45 minutes in seconds
         start_listeners_on_main_thread: bool = False,  # macOS: run listeners on main thread
     ) -> None:
+        log = logging.getLogger("Screen")
         self.screens_dir = os.path.abspath(os.path.expanduser(screenshots_dir))
         os.makedirs(self.screens_dir, exist_ok=True)
 
@@ -329,6 +331,7 @@ class Screen(Observer):
         self._inactivity_timeout = inactivity_timeout
         self._last_activity_time: Optional[float] = None
         self._inactivity_lock = asyncio.Lock()
+        self._after_delay = 0.12
 
         # Window tracking configuration (support for multiple windows)
         self._track_window_id = track_window_id
@@ -336,7 +339,6 @@ class Screen(Observer):
             dict
         ] = []  # List of {"id": window_id, "region": {...}, "fixed": bool}
         self._current_region_lock = asyncio.Lock()
-
 
         # Set target region from coordinates, window tracking, or mouse selection
         if record_all_screens:
@@ -365,21 +367,22 @@ class Screen(Observer):
                         "original_size": None  # Fixed region, never update
                     })
                     if self.debug:
-                        print(f"Recording full screen - Monitor {i}: {region}")
+                        log.info(f"Recording full screen - Monitor {i}: {region}")
 
-            print(f"Recording all {len(self._tracked_windows)} monitor(s)")
+            log.info(f"Recording all {len(self._tracked_windows)} monitor(s)")
         elif track_window_id:
             # Track window by ID
-            region = _get_window_bounds_by_id(track_window_id)
+            region, owner = _get_window_bounds_by_id(track_window_id)
             if region is None:
                 raise ValueError(f"Window with ID {track_window_id} not found")
             self._tracked_windows.append({
                 "id": track_window_id,
                 "region": region,
+                "owner": owner,
                 "original_size": (region["width"], region["height"])  # Preserve selection size
             })
             if self.debug:
-                print(f"Tracking window by ID {track_window_id}: {region}")
+                log.info(f"Tracking window by ID {track_window_id}: {region}")
         elif target_coordinates:
             # target_coordinates should be (left, top, width, height)
             left, top, width, height = target_coordinates
@@ -390,13 +393,15 @@ class Screen(Observer):
                 "original_size": None  # Fixed region, never update
             })
             if self.debug:
-                print(f"Using target coordinates: {region}")
+                log.info(f"Using target coordinates: {region}")
         else:
             # User selects region(s)/window(s) with mouse
             regions, window_ids = select_region_with_mouse()
 
             # Convert regions from Quartz coordinates to screen coordinates
             _, _, _, gmax_y = _get_global_bounds()
+            if self.debug:
+                log.debug(f"Global max Y: {gmax_y}")
 
             # Get screen dimensions to detect fullscreen selections
             import mss
@@ -409,20 +414,17 @@ class Screen(Observer):
                 # Skip zero-sized regions (created by clicks without drag)
                 if region["width"] == 0 or region["height"] == 0:
                     if self.debug:
-                        print(f"Skipping zero-sized region: {region}")
+                        log.info(f"Skipping zero-sized region: {region}")
                     continue
 
-                # Regions from select_region_with_mouse are in Quartz coords
-                # Convert to screen coords for consistent comparison
-                quartz_top = region["top"]
-                height = region["height"]
-                screen_top = gmax_y - quartz_top - height
-
+                # Regions from select_region_with_mouse - keep as-is
+                screen_top = gmax_y - region["top"] - region["height"]
+                
                 screen_region = {
                     "left": region["left"],
-                    "top": int(screen_top),
+                    "top": screen_top,
                     "width": region["width"],
-                    "height": height
+                    "height": region["height"]
                 }
 
                 # If this is a fullscreen selection, treat it as a fixed region (no window tracking)
@@ -432,20 +434,28 @@ class Screen(Observer):
                     region["height"] >= screen_height * 0.95
                 )
 
+                # Get owner name if tracking a window
+                owner = None
+                if window_id is not None:
+                    _, owner = _get_window_bounds_by_id(window_id)
+
                 self._tracked_windows.append({
                     "id": window_id,
                     "region": screen_region,
+                    "owner": owner,
                     "original_size": (region["width"], region["height"]) if window_id else None
                 })
 
                 if is_fullscreen and not window_id:
-                    print(f"Using fullscreen region (no window tracking): {screen_region}")
+                    log.info(f"Using fullscreen region (no window tracking): {screen_region}")
                 elif window_id is not None:
-                    print(f"Tracking selected window (ID: {window_id}): {screen_region}")
+                    log.info(
+                        f"Tracking selected window (ID: {window_id}, owner: '{owner}'): {screen_region}"
+                    )
                 else:
-                    print(f"Using fixed region: {screen_region}")
+                    log.info(f"Using fixed region: {screen_region}")
 
-            print(f"\nTotal windows/regions selected: {len(self._tracked_windows)}")
+            log.info(f"Total windows/regions selected: {len(self._tracked_windows)}")
 
         # Detect and store high-DPI status
         self._is_high_dpi = self._detect_high_dpi()
@@ -478,7 +488,7 @@ class Screen(Observer):
 
         # Store listener factory functions for deferred initialization
         self._mouse_listener_factory = lambda: mouse.Listener(
-            on_click=lambda x, y, btn, prs: safe_schedule_event(x, y, f"click_{btn.name}") if prs else None,
+            on_click=lambda x, y, btn, prs: safe_schedule_event(x, y, f"click_{btn.name}_{'down' if prs else 'up'}"),
             on_scroll=lambda x, y, dx, dy: safe_schedule_scroll(x, y, dx, dy),
         )
         self._key_listener_factory = lambda: keyboard.Listener(
@@ -555,12 +565,15 @@ class Screen(Observer):
                 # Window exists but may not be visible (minimized, different Space, etc.)
                 any_window_open = True
 
-                # Try to get visible bounds
-                new_region = await self._run_in_thread(
+                # Try to get visible bounds and owner
+                new_region, new_owner = await self._run_in_thread(
                     _get_window_bounds_by_id, tracked["id"]
                 )
 
                 if new_region:
+                    # Update owner if it changed
+                    if new_owner:
+                        tracked["owner"] = new_owner
                     # Window is visible - update its bounds
                     original_width, original_height = tracked.get("original_size", (new_region["width"], new_region["height"]))
 
@@ -590,18 +603,33 @@ class Screen(Observer):
 
     def _is_point_in_region(self, x: float, y: float, region: dict) -> bool:
         """Check if a point (in global coordinates) is inside a region."""
-        return (
-            region["left"] <= x < region["left"] + region["width"]
-            and region["top"] <= y < region["top"] + region["height"]
-        )
+        x_min = region["left"]
+        x_max = region["left"] + region["width"]
+        y_min = region["top"]
+        y_max = region["top"] + region["height"]
 
-    def _get_topmost_window_at_point(self, x: float, y: float) -> Optional[int]:
-        """Get the window ID of the topmost window at the given point.
+        _, _, _, gmax_y = _get_global_bounds()
+        quartz_y = gmax_y - y
+
+        x_check = x_min <= x < x_max
+        y_check = y_min <= quartz_y < y_max
+
+        if self.debug:
+            log = logging.getLogger("Screen")
+            log.debug(f"Bounds check: x={x:.1f} in [{x_min}, {x_max})? {x_check}")
+            log.debug(
+                f"Bounds check: y={quartz_y:.1f} in [{y_min}, {y_max})? {y_check}"
+            )
+
+        return x_check and y_check
+
+    def _get_topmost_window_at_point(self, x: float, y: float) -> Optional[tuple[int, str]]:
+        """Get the window ID and owner of the topmost window at the given point.
 
         Parameters:
         - x, y: Screen coordinates (Y=0 at top)
 
-        Returns the CGWindowNumber of the topmost window at (x, y), or None if none found.
+        Returns tuple of (window_id, owner_name) or (None, None) if none found.
         """
         import Quartz
 
@@ -610,12 +638,8 @@ class Screen(Observer):
         wins = Quartz.CGWindowListCopyWindowInfo(opts, Quartz.kCGNullWindowID)
 
         if not wins:
-            return None
-
-        # Convert screen Y to Quartz Y for comparison with window bounds
-        _, _, _, gmax_y = _get_global_bounds()
-        quartz_y = gmax_y - y
-
+            return None, None
+        
         # Find topmost non-system window at this point
         for win in wins:
             bounds = win.get("kCGWindowBounds", {})
@@ -629,8 +653,17 @@ class Screen(Observer):
                 bounds.get("Height", 0),
             )
 
-            # Check if point is within this window
-            if wx <= x <= wx + ww and wy <= quartz_y <= wy + wh:
+            if self.debug:
+                log = logging.getLogger("Screen")
+                log.debug(f"Window bounds: x=[{wx}, {wx+ww}], y=[{wy}, {wy+wh}]")
+                log.debug(f"Window owner: {win.get('kCGWindowOwnerName', 'Unknown')}")
+                log.debug(f"Window id: {win.get('kCGWindowNumber')}")
+
+            # Compare with screen coordinates
+            x_match = wx <= x <= wx + ww
+            y_match = wy <= y <= wy + wh
+
+            if x_match and y_match:
                 window_id = win.get("kCGWindowNumber")
                 owner = win.get("kCGWindowOwnerName", "Unknown")
                 layer = win.get("kCGWindowLayer", 0)
@@ -640,36 +673,61 @@ class Screen(Observer):
                 is_system = owner in ("Dock", "WindowServer", "Window Server")
 
                 if not is_system and not is_menubar:
-                    return window_id
+                    if self.debug:
+                        logging.getLogger("Screen").debug(
+                            f"Topmost window: owner='{owner}', id={window_id}"
+                        )
+                    return window_id, owner
+                else:
+                    if self.debug:
+                        logging.getLogger("Screen").debug(
+                            f"Skipping window (is_system={is_system}, is_menubar={is_menubar})"
+                        )
 
-        return None
+        if self.debug:
+            logging.getLogger("Screen").debug("No non-system window found at point")
+        return None, None
 
     def _find_region_for_point(self, x: float, y: float) -> Optional[dict]:
         """Find which tracked window/region contains this point.
 
-        Returns the tracked window dict {"id": ..., "region": ...} or None if not found.
+        Returns the tracked window dict {"id": ..., "region": ..., "owner": ...} or None if not found.
 
-        For tracked windows (not manual regions), this also verifies that the tracked
-        window is actually the topmost window at this point.
+        For tracked windows (not manual regions), this verifies that the topmost window
+        belongs to the same app (owner) as the tracked window.
         """
         for tracked in self._tracked_windows:
             # Skip windows that have been closed (region is None)
             if tracked["region"] is None:
                 continue
             if self._is_point_in_region(x, y, tracked["region"]):
-                # If this is a tracked window (has window_id), verify it's topmost
-                if tracked["id"] is not None:
-                    topmost_id = self._get_topmost_window_at_point(x, y)
+                if self.debug:
+                    logging.getLogger("Screen").debug("Point is within region bounds")
+                # If this is a tracked window (has window_id), verify owner matches
+                if tracked["id"] is not None and tracked.get("owner"):
+                    topmost_id, topmost_owner = self._get_topmost_window_at_point(x, y)
+                    if self.debug:
+                        logging.getLogger("Screen").debug(
+                            "Owner check: tracked='%s', topmost='%s'",
+                            tracked.get("owner"),
+                            topmost_owner,
+                        )
 
-                    if topmost_id != tracked["id"]:
-                        # Tracked window is not topmost - ignore this interaction
+                    if topmost_owner != tracked.get("owner"):
+                        # Topmost window is from a different app - ignore this interaction
+                        if self.debug:
+                            logging.getLogger("Screen").debug(
+                                "Different app on top; skipping interaction"
+                            )
                         if self.debug:
                             logging.getLogger("Screen").info(
-                                f"Skipping interaction at ({x:.1f}, {y:.1f}) - tracked window not on top"
+                                f"Skipping interaction at ({x:.1f}, {y:.1f}) - different app on top"
                             )
                         continue
 
-                # Point is in region and (if tracked) window is topmost
+                # Point is in region and (if tracked) same app is topmost
+                if self.debug:
+                    logging.getLogger("Screen").debug("Point accepted")
                 return tracked
         return None
 
@@ -860,6 +918,7 @@ class Screen(Observer):
             )
             self._gdrive_setup_failed = True
 
+
     async def _save_frame(
         self,
         frame,
@@ -867,6 +926,7 @@ class Screen(Observer):
         x,
         y,
         tag: str,
+        highlight: bool = True,
         box_color: str = "red",
         box_width: int = 10,
     ) -> str:
@@ -883,6 +943,8 @@ class Screen(Observer):
             Mouse coordinates in logical points (relative to monitor)
         tag : str
             Filename tag
+        highlight : bool
+            When False, skip drawing the highlight overlays
         box_color : str
             Color for bounding box and crosshair
         box_width : int
@@ -893,12 +955,20 @@ class Screen(Observer):
         image = Image.frombytes("RGB", (frame.width, frame.height), frame.rgb)
         draw = ImageDraw.Draw(image)
 
-        # Compute actual scale factor from frame vs monitor dimensions
-        # This handles any DPI (1.0x, 1.5x, 2.0x, 2.5x, etc.) correctly
+        # # Compute actual scale factor from frame vs monitor dimensions
+        # # This handles any DPI (1.0x, 1.5x, 2.0x, 2.5x, etc.) correctly
         scale_x = frame.width / monitor_rect["width"]
         scale_y = frame.height / monitor_rect["height"]
 
-        # Convert logical point coordinates to physical pixel coordinates
+        if self.debug:
+            log = logging.getLogger("Screen")
+            log.debug("monitor_rect=%s", monitor_rect)
+            log.debug("x=%s", x)
+            log.debug("y=%s", y)
+            log.debug("scale_x=%s", scale_x)
+            log.debug("scale_y=%s", scale_y)
+
+        # # Convert logical point coordinates to physical pixel coordinates
         x_pixel = int(x * scale_x)
         y_pixel = int(y * scale_y)
 
@@ -906,36 +976,37 @@ class Screen(Observer):
         x_pixel = max(0, min(frame.width - 1, x_pixel))
         y_pixel = max(0, min(frame.height - 1, y_pixel))
 
-        # Calculate bounding box with smaller, more precise padding
-        # Use average scale for box size to handle non-uniform scaling
-        avg_scale = (scale_x + scale_y) / 2.0
-        box_size = int(30 * avg_scale)  # 30 logical points
-        x1 = max(0, x_pixel - box_size)
-        x2 = min(frame.width, x_pixel + box_size)
-        y1 = max(0, y_pixel - box_size)
-        y2 = min(frame.height, y_pixel + box_size)
+        if highlight:
+            # Calculate bounding box with smaller, more precise padding
+            # Use average scale for box size to handle non-uniform scaling
+            avg_scale = (scale_x + scale_y) / 2.0
+            box_size = int(30 * avg_scale)  # 30 logical points
+            x1 = max(0, x_pixel - box_size)
+            x2 = min(frame.width, x_pixel + box_size)
+            y1 = max(0, y_pixel - box_size)
+            y2 = min(frame.height, y_pixel + box_size)
 
-        # Draw the bounding box if coordinates are valid
-        if x1 < x2 and y1 < y2:
-            draw.rectangle([x1, y1, x2, y2], outline=box_color, width=box_width)
+            # Draw the bounding box if coordinates are valid
+            if x1 < x2 and y1 < y2:
+                draw.rectangle([x1, y1, x2, y2], outline=box_color, width=box_width)
 
-        # Draw a crosshair at the exact mouse position
-        crosshair_size = int(15 * avg_scale)  # 15 logical points
-        crosshair_width = max(2, int(3 * avg_scale))
+            # Draw a crosshair at the exact mouse position
+            crosshair_size = int(15 * avg_scale)  # 15 logical points
+            crosshair_width = max(2, int(3 * avg_scale))
 
-        # Horizontal line
-        h_x1 = max(0, x_pixel - crosshair_size)
-        h_x2 = min(frame.width, x_pixel + crosshair_size)
-        draw.line(
-            [(h_x1, y_pixel), (h_x2, y_pixel)], fill=box_color, width=crosshair_width
-        )
+            # Horizontal line
+            h_x1 = max(0, x_pixel - crosshair_size)
+            h_x2 = min(frame.width, x_pixel + crosshair_size)
+            draw.line(
+                [(h_x1, y_pixel), (h_x2, y_pixel)], fill=box_color, width=crosshair_width
+            )
 
-        # Vertical line
-        v_y1 = max(0, y_pixel - crosshair_size)
-        v_y2 = min(frame.height, y_pixel + crosshair_size)
-        draw.line(
-            [(x_pixel, v_y1), (x_pixel, v_y2)], fill=box_color, width=crosshair_width
-        )
+            # Vertical line
+            v_y1 = max(0, y_pixel - crosshair_size)
+            v_y2 = min(frame.height, y_pixel + crosshair_size)
+            draw.line(
+                [(x_pixel, v_y1), (x_pixel, v_y2)], fill=box_color, width=crosshair_width
+            )
 
         # Save with lower quality to reduce memory usage and disk I/O
         await self._run_in_thread(
@@ -1173,9 +1244,35 @@ class Screen(Observer):
 
             # ---- mouse event reception ----
             async def _handle_mouse_event(x: float, y: float, typ: str):
-                # Convert pynput coordinates (Cocoa, Y from bottom) to screen coordinates (Y from top)
+                try:
+                    base, phase = typ.rsplit("_", 1)
+                except ValueError:
+                    if self.debug:
+                        log.info(f"Ignoring mouse event '{typ}' without phase suffix")
+                    return
+
+                if phase not in {"down", "up"}:
+                    return
+
+                if phase == "up":
+                    if self._pending_event is None:
+                        return
+
+                    async def delayed_flush():
+                        await asyncio.sleep(self._after_delay)
+                        await flush()
+
+                    asyncio.create_task(delayed_flush())
+                    return
+
+                # pynput returns screen coordinates (Y=0 at top), no conversion needed
                 _, _, _, gmax_y = await self._run_in_thread(_get_global_bounds)
                 screen_y = gmax_y - y
+
+                if self.debug:
+                    logging.getLogger("Screen").debug(
+                        "Mouse event raw coords: (%.1f, %.1f)", x, y
+                    )
 
                 # Check if point is in any of our tracked windows/regions
                 tracked = self._find_region_for_point(x, screen_y)
@@ -1191,8 +1288,7 @@ class Screen(Observer):
                     await self._update_tracked_regions()
 
                 mon = tracked["region"]
-                rel_x = x - mon["left"]
-                rel_y = screen_y - mon["top"]
+
                 idx = self._tracked_windows.index(tracked) + 1  # 1-indexed for display
 
                 # Grab FRESH "before" frame using current window rect
@@ -1205,32 +1301,32 @@ class Screen(Observer):
                         log.error(f"Failed to capture before frame: {e}")
                     return
 
-                log.info(
-                    f"{typ:<6} @({rel_x:7.1f},{rel_y:7.1f}) → win={idx}   {'(guarded)' if self._skip() else ''}"
-                )
                 if self._skip():
                     return
 
                 # Update activity timestamp
                 await self._update_activity_time()
 
+                rel_x = x - mon["left"]
+                rel_y = mon["top"] + mon["height"] - screen_y
+                log.info(
+                    f"{typ:<6} @({rel_x:7.1f},{rel_y:7.1f}) → win={idx}"
+                )
                 self._pending_event = {
-                    "type": typ,
+                    "type": base,
                     "position": (rel_x, rel_y),
                     "mon": idx,
                     "before": bf,
                     "monitor_rect": mon,
                 }
-
-                # Process asynchronously - don't wait for completion
-                asyncio.create_task(flush())
+                return
 
             # ---- keyboard event reception ----
             async def _handle_key_event(key, typ: str):
                 # Get current mouse position to determine active window
                 x, y = mouse.Controller().position
 
-                # Convert pynput coordinates (Cocoa, Y from bottom) to screen coordinates (Y from top)
+                # pynput already returns Y=0 at top, no conversion needed
                 _, _, _, gmax_y = await self._run_in_thread(_get_global_bounds)
                 screen_y = gmax_y - y
 
@@ -1248,8 +1344,8 @@ class Screen(Observer):
                     await self._update_tracked_regions()
 
                 mon = tracked["region"]
-                rel_x = x - mon["left"]
-                rel_y = screen_y - mon["top"]
+                rel_x = x
+                rel_y = screen_y - mon["height"]
                 idx = self._tracked_windows.index(tracked) + 1  # 1-indexed for display
 
                 # Grab FRESH frame using current window rect
@@ -1296,7 +1392,7 @@ class Screen(Observer):
                     else:
                         # Continue existing session - save intermediate screenshot
                         screenshot_path = await self._save_frame(
-                            frame, mon, rel_x, rel_y, f"{step}_intermediate"
+                            frame, mon, rel_x, rel_y, f"{step}_intermediate", highlight=False
                         )
                         self._key_screenshots.append(screenshot_path)
                         log.info(
@@ -1334,8 +1430,8 @@ class Screen(Observer):
                     await self._update_tracked_regions()
 
                 mon = tracked["region"]
-                rel_x = x - mon["left"]
-                rel_y = screen_y - mon["top"]
+                rel_x = x
+                rel_y = screen_y - mon["height"]
                 idx = self._tracked_windows.index(tracked) + 1  # 1-indexed for display
 
                 # Grab FRESH "before" frame using current window rect
@@ -1402,13 +1498,16 @@ class Screen(Observer):
                         inactive_duration = t0 - self._last_activity_time
                         if inactive_duration >= self._inactivity_timeout:
                             log.info(
-                                f"Stopping recording due to {inactive_duration / 60:.1f} minutes of inactivity"
+                                "Stopping recording due to %.1f minutes of inactivity",
+                                inactive_duration / 60,
                             )
-                            print(f"\n{'=' * 70}")
-                            print(
-                                f"Recording automatically stopped after {inactive_duration / 60:.1f} minutes of inactivity"
+                            banner = "=" * 70
+                            log.info(banner)
+                            log.info(
+                                "Recording automatically stopped after %.1f minutes of inactivity",
+                                inactive_duration / 60,
                             )
-                            print(f"{'=' * 70}\n")
+                            log.info(banner)
                             self._running = False
                             # Stop listeners to exit the main thread
                             self.stop_listeners_sync()
@@ -1422,9 +1521,10 @@ class Screen(Observer):
                     # Stop recording if all tracked windows are closed
                     if not any_window_open:
                         log.info("All tracked windows closed - stopping recording")
-                        print(f"\n{'=' * 70}")
-                        print("All tracked windows have been closed")
-                        print(f"{'=' * 70}\n")
+                        banner = "=" * 70
+                        log.info(banner)
+                        log.info("All tracked windows have been closed")
+                        log.info(banner)
                         # Stop listeners to exit the main thread
                         self.stop_listeners_sync()
                         self._running = False
