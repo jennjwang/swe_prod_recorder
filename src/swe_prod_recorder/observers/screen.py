@@ -266,6 +266,7 @@ class Screen(Observer):
         inactivity_timeout: float = 45 * 60,  # 45 minutes in seconds
         start_listeners_on_main_thread: bool = False,  # macOS: run listeners on main thread
     ) -> None:
+        log = logging.getLogger("Screen")
         self.screens_dir = os.path.abspath(os.path.expanduser(screenshots_dir))
         os.makedirs(self.screens_dir, exist_ok=True)
 
@@ -366,9 +367,9 @@ class Screen(Observer):
                         "original_size": None  # Fixed region, never update
                     })
                     if self.debug:
-                        print(f"Recording full screen - Monitor {i}: {region}")
+                        log.info(f"Recording full screen - Monitor {i}: {region}")
 
-            print(f"Recording all {len(self._tracked_windows)} monitor(s)")
+            log.info(f"Recording all {len(self._tracked_windows)} monitor(s)")
         elif track_window_id:
             # Track window by ID
             region, owner = _get_window_bounds_by_id(track_window_id)
@@ -381,7 +382,7 @@ class Screen(Observer):
                 "original_size": (region["width"], region["height"])  # Preserve selection size
             })
             if self.debug:
-                print(f"Tracking window by ID {track_window_id}: {region}")
+                log.info(f"Tracking window by ID {track_window_id}: {region}")
         elif target_coordinates:
             # target_coordinates should be (left, top, width, height)
             left, top, width, height = target_coordinates
@@ -392,14 +393,15 @@ class Screen(Observer):
                 "original_size": None  # Fixed region, never update
             })
             if self.debug:
-                print(f"Using target coordinates: {region}")
+                log.info(f"Using target coordinates: {region}")
         else:
             # User selects region(s)/window(s) with mouse
             regions, window_ids = select_region_with_mouse()
 
             # Convert regions from Quartz coordinates to screen coordinates
             _, _, _, gmax_y = _get_global_bounds()
-            print(f"Global max Y: {gmax_y}")
+            if self.debug:
+                log.debug(f"Global max Y: {gmax_y}")
 
             # Get screen dimensions to detect fullscreen selections
             import mss
@@ -412,7 +414,7 @@ class Screen(Observer):
                 # Skip zero-sized regions (created by clicks without drag)
                 if region["width"] == 0 or region["height"] == 0:
                     if self.debug:
-                        print(f"Skipping zero-sized region: {region}")
+                        log.info(f"Skipping zero-sized region: {region}")
                     continue
 
                 # Regions from select_region_with_mouse - keep as-is
@@ -445,13 +447,15 @@ class Screen(Observer):
                 })
 
                 if is_fullscreen and not window_id:
-                    print(f"Using fullscreen region (no window tracking): {screen_region}")
+                    log.info(f"Using fullscreen region (no window tracking): {screen_region}")
                 elif window_id is not None:
-                    print(f"Tracking selected window (ID: {window_id}, owner: '{owner}'): {screen_region}")
+                    log.info(
+                        f"Tracking selected window (ID: {window_id}, owner: '{owner}'): {screen_region}"
+                    )
                 else:
-                    print(f"Using fixed region: {screen_region}")
+                    log.info(f"Using fixed region: {screen_region}")
 
-            print(f"\nTotal windows/regions selected: {len(self._tracked_windows)}")
+            log.info(f"Total windows/regions selected: {len(self._tracked_windows)}")
 
         # Detect and store high-DPI status
         self._is_high_dpi = self._detect_high_dpi()
@@ -610,8 +614,12 @@ class Screen(Observer):
         x_check = x_min <= x < x_max
         y_check = y_min <= quartz_y < y_max
 
-        print(f"   Bounds check: x={x:.1f} in [{x_min}, {x_max})? {x_check}")
-        print(f"   Bounds check: y={quartz_y:.1f} in [{y_min}, {y_max})? {y_check}")
+        if self.debug:
+            log = logging.getLogger("Screen")
+            log.debug(f"Bounds check: x={x:.1f} in [{x_min}, {x_max})? {x_check}")
+            log.debug(
+                f"Bounds check: y={quartz_y:.1f} in [{y_min}, {y_max})? {y_check}"
+            )
 
         return x_check and y_check
 
@@ -645,9 +653,11 @@ class Screen(Observer):
                 bounds.get("Height", 0),
             )
 
-            print(f"   Window bounds: x=[{wx}, {wx+ww}], y=[{wy}, {wy+wh}]")
-            print(f"   Window owner: {win.get('kCGWindowOwnerName', 'Unknown')}")
-            print(f"   Window id: {win.get('kCGWindowNumber')}")
+            if self.debug:
+                log = logging.getLogger("Screen")
+                log.debug(f"Window bounds: x=[{wx}, {wx+ww}], y=[{wy}, {wy+wh}]")
+                log.debug(f"Window owner: {win.get('kCGWindowOwnerName', 'Unknown')}")
+                log.debug(f"Window id: {win.get('kCGWindowNumber')}")
 
             # Compare with screen coordinates
             x_match = wx <= x <= wx + ww
@@ -663,12 +673,19 @@ class Screen(Observer):
                 is_system = owner in ("Dock", "WindowServer", "Window Server")
 
                 if not is_system and not is_menubar:
-                    print(f"   ✓ Topmost window: owner='{owner}', id={window_id}")
+                    if self.debug:
+                        logging.getLogger("Screen").debug(
+                            f"Topmost window: owner='{owner}', id={window_id}"
+                        )
                     return window_id, owner
                 else:
-                    print(f"      (skipping: is_system={is_system}, is_menubar={is_menubar})")
+                    if self.debug:
+                        logging.getLogger("Screen").debug(
+                            f"Skipping window (is_system={is_system}, is_menubar={is_menubar})"
+                        )
 
-        print(f"   ✗ No non-system window found at point")
+        if self.debug:
+            logging.getLogger("Screen").debug("No non-system window found at point")
         return None, None
 
     def _find_region_for_point(self, x: float, y: float) -> Optional[dict]:
@@ -684,15 +701,24 @@ class Screen(Observer):
             if tracked["region"] is None:
                 continue
             if self._is_point_in_region(x, y, tracked["region"]):
-                print(f"   ✓ Point IS in region bounds")
+                if self.debug:
+                    logging.getLogger("Screen").debug("Point is within region bounds")
                 # If this is a tracked window (has window_id), verify owner matches
                 if tracked["id"] is not None and tracked.get("owner"):
                     topmost_id, topmost_owner = self._get_topmost_window_at_point(x, y)
-                    print(f"   Checking owners: tracked='{tracked.get('owner')}', topmost='{topmost_owner}'")
+                    if self.debug:
+                        logging.getLogger("Screen").debug(
+                            "Owner check: tracked='%s', topmost='%s'",
+                            tracked.get("owner"),
+                            topmost_owner,
+                        )
 
                     if topmost_owner != tracked.get("owner"):
                         # Topmost window is from a different app - ignore this interaction
-                        print(f"   ❌ Different app on top - skipping")
+                        if self.debug:
+                            logging.getLogger("Screen").debug(
+                                "Different app on top; skipping interaction"
+                            )
                         if self.debug:
                             logging.getLogger("Screen").info(
                                 f"Skipping interaction at ({x:.1f}, {y:.1f}) - different app on top"
@@ -700,7 +726,8 @@ class Screen(Observer):
                         continue
 
                 # Point is in region and (if tracked) same app is topmost
-                print(f"   ✅ Point accepted!")
+                if self.debug:
+                    logging.getLogger("Screen").debug("Point accepted")
                 return tracked
         return None
 
@@ -933,11 +960,13 @@ class Screen(Observer):
         scale_x = frame.width / monitor_rect["width"]
         scale_y = frame.height / monitor_rect["height"]
 
-        print("monitor_rect", monitor_rect)
-        print("x", x)
-        print("y", y)
-        print("scale_x", scale_x)
-        print("scale_y", scale_y)
+        if self.debug:
+            log = logging.getLogger("Screen")
+            log.debug("monitor_rect=%s", monitor_rect)
+            log.debug("x=%s", x)
+            log.debug("y=%s", y)
+            log.debug("scale_x=%s", scale_x)
+            log.debug("scale_y=%s", scale_y)
 
         # # Convert logical point coordinates to physical pixel coordinates
         x_pixel = int(x * scale_x)
@@ -1240,8 +1269,10 @@ class Screen(Observer):
                 _, _, _, gmax_y = await self._run_in_thread(_get_global_bounds)
                 screen_y = gmax_y - y
 
-                print(f"\n🖱️  CLICK DEBUG:")
-                print(f"   Raw click: ({x:.1f}, {y:.1f})")
+                if self.debug:
+                    logging.getLogger("Screen").debug(
+                        "Mouse event raw coords: (%.1f, %.1f)", x, y
+                    )
 
                 # Check if point is in any of our tracked windows/regions
                 tracked = self._find_region_for_point(x, screen_y)
@@ -1467,13 +1498,16 @@ class Screen(Observer):
                         inactive_duration = t0 - self._last_activity_time
                         if inactive_duration >= self._inactivity_timeout:
                             log.info(
-                                f"Stopping recording due to {inactive_duration / 60:.1f} minutes of inactivity"
+                                "Stopping recording due to %.1f minutes of inactivity",
+                                inactive_duration / 60,
                             )
-                            print(f"\n{'=' * 70}")
-                            print(
-                                f"Recording automatically stopped after {inactive_duration / 60:.1f} minutes of inactivity"
+                            banner = "=" * 70
+                            log.info(banner)
+                            log.info(
+                                "Recording automatically stopped after %.1f minutes of inactivity",
+                                inactive_duration / 60,
                             )
-                            print(f"{'=' * 70}\n")
+                            log.info(banner)
                             self._running = False
                             # Stop listeners to exit the main thread
                             self.stop_listeners_sync()
@@ -1487,9 +1521,10 @@ class Screen(Observer):
                     # Stop recording if all tracked windows are closed
                     if not any_window_open:
                         log.info("All tracked windows closed - stopping recording")
-                        print(f"\n{'=' * 70}")
-                        print("All tracked windows have been closed")
-                        print(f"{'=' * 70}\n")
+                        banner = "=" * 70
+                        log.info(banner)
+                        log.info("All tracked windows have been closed")
+                        log.info(banner)
                         # Stop listeners to exit the main thread
                         self.stop_listeners_sync()
                         self._running = False
