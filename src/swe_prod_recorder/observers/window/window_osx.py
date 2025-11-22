@@ -325,7 +325,16 @@ class SelectionView(AppKit.NSView):
             window_frame.origin.x + location.x, window_frame.origin.y + location.y
         )
 
+        # Debug coordinate conversion
+        print(f"\n🎯 Click Debug:")
+        print(f"   Window frame: origin=({window_frame.origin.x:.0f}, {window_frame.origin.y:.0f}), size=({window_frame.size.width:.0f}x{window_frame.size.height:.0f})")
+        print(f"   Click in window: ({location.x:.0f}, {location.y:.0f})")
+        print(f"   Global screen point: ({screen_point.x:.0f}, {screen_point.y:.0f})")
+
+        # Use kCGWindowListOptionAll to include windows behind the overlay
+        # (important for single-monitor setups where overlay covers everything)
         window_list = Quartz.CGWindowListCopyWindowInfo(
+            # Quartz.kCGWindowListOptionAll
             Quartz.kCGWindowListOptionOnScreenOnly
             | Quartz.kCGWindowListExcludeDesktopElements,
             Quartz.kCGNullWindowID,
@@ -339,14 +348,34 @@ class SelectionView(AppKit.NSView):
             f = scr.frame()
             max_y = max(max_y, f.origin.y + f.size.height)
         quartz_y = max_y - screen_point.y
+        print(f"   Max Y: {max_y:.0f}, Quartz Y: {quartz_y:.0f}")
 
         # Get screen dimensions for filtering
+        # Use 105% of max screen size to allow for maximized windows while still filtering desktop
         screens = AppKit.NSScreen.screens()
         max_screen_width = max(scr.frame().size.width for scr in screens) if screens else 3840
         max_screen_height = max(scr.frame().size.height for scr in screens) if screens else 2160
 
-        # Find all matching windows and prefer the largest
+        # Add a 10% buffer to account for maximized windows on single monitor setups
+        screen_width_threshold = max_screen_width * 1.1
+        screen_height_threshold = max_screen_height * 1.1
+
+        # Debug: Print all windows to understand what we're seeing
+        print(f"\n=== All Windows at Click (first 20) ===")
+        for i, win in enumerate(window_list[:20]):
+            owner = win.get("kCGWindowOwnerName", "Unknown")
+            bounds = win.get("kCGWindowBounds", {})
+            w_width = bounds.get("Width", 0)
+            w_height = bounds.get("Height", 0)
+            layer = win.get("kCGWindowLayer", 0)
+            onscreen = win.get("kCGWindowIsOnscreen", False)
+            wid = win.get("kCGWindowNumber")
+            print(f"  [{i}] '{owner}': {w_width:.0f}x{w_height:.0f}, layer={layer}, onscreen={onscreen}, id={wid}")
+        print("=" * 60 + "\n")
+
+        # Find all matching windows and prefer the first (topmost in Z-order)
         matching_windows = []
+
         for win in window_list:
             bounds = win.get("kCGWindowBounds", {})
             if not bounds:
@@ -359,38 +388,50 @@ class SelectionView(AppKit.NSView):
             )
             layer = win.get("kCGWindowLayer", 0)
             owner_name = win.get("kCGWindowOwnerName", "")
+            window_id = win.get("kCGWindowNumber")
+            is_onscreen = win.get("kCGWindowIsOnscreen", False)
+
+            # Filter out windows that aren't actually visible (ensures correct Z-order)
+            if not is_onscreen:
+                continue
 
             # Filter out system windows
             excluded_owners = {"Dock", "WindowServer", "Window Manager", "Desktop", "Wallpaper"}
             if owner_name in excluded_owners:
                 continue
 
-            # Filter out floating windows and very small windows
-            if layer >= AppKit.NSFloatingWindowLevel or w < 200 or h < 150:
+            # Filter out the overlay window itself (floating level)
+            if layer >= AppKit.NSFloatingWindowLevel:
                 continue
 
-            # Filter out screen-sized windows (desktop containers)
-            # Allow full-screen apps only if they have a legitimate app owner
-            if w >= max_screen_width or h >= max_screen_height:
+            # Filter out very tiny windows (likely not actual app windows)
+            if w < 50 or h < 50:
+                continue
+
+            # Filter out screen-sized windows without legitimate owners (desktop containers)
+            if w >= screen_width_threshold or h >= screen_height_threshold:
                 if not owner_name or owner_name in {"Window Server", "Window Manager", "Finder"}:
                     continue
 
             if x <= screen_point.x <= x + w and y <= quartz_y <= y + h:
-                window_id = win.get("kCGWindowNumber")
                 matching_windows.append({
                     "left": int(x),
                     "top": int(y),
                     "width": int(w),
                     "height": int(h),
                     "window_id": window_id,
+                    "owner_name": owner_name,
                     "area": w * h,
                 })
 
-        # Return the largest matching window to avoid sub-panels
+        # Return the first matching window (topmost in Z-order)
+        # Windows are returned front-to-back, so first match is the visible window
         if matching_windows:
-            largest = max(matching_windows, key=lambda w: w["area"])
-            largest.pop("area")
-            return largest
+            first_match = matching_windows[0]
+            print(f"✅ SELECTED: '{first_match.get('owner_name')}' (id={first_match.get('window_id')}, {first_match.get('width')}x{first_match.get('height')})")
+            first_match.pop("area")
+            first_match.pop("owner_name")  # Remove before returning
+            return first_match
         return None
 
     def drawRect_(self, _):
@@ -649,6 +690,10 @@ def select_region_with_mouse() -> tuple[list[dict], list[int | None]]:
         # Store window and view
         _all_overlay_windows.append(window)
         _all_overlay_views.append(view)
+
+        # Debug: Print overlay window info
+        overlay_window_num = window.windowNumber()
+        print(f"   → Overlay window created: id={overlay_window_num}, level={AppKit.NSFloatingWindowLevel}")
 
     # Show all windows
     for window in _all_overlay_windows:
