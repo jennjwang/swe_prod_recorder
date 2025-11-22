@@ -330,6 +330,7 @@ class Screen(Observer):
         self._inactivity_timeout = inactivity_timeout
         self._last_activity_time: Optional[float] = None
         self._inactivity_lock = asyncio.Lock()
+        self._after_delay = 0.12
 
         # Window tracking configuration (support for multiple windows)
         self._track_window_id = track_window_id
@@ -337,7 +338,6 @@ class Screen(Observer):
             dict
         ] = []  # List of {"id": window_id, "region": {...}, "fixed": bool}
         self._current_region_lock = asyncio.Lock()
-
 
         # Set target region from coordinates, window tracking, or mouse selection
         if record_all_screens:
@@ -484,7 +484,7 @@ class Screen(Observer):
 
         # Store listener factory functions for deferred initialization
         self._mouse_listener_factory = lambda: mouse.Listener(
-            on_click=lambda x, y, btn, prs: safe_schedule_event(x, y, f"click_{btn.name}") if prs else None,
+            on_click=lambda x, y, btn, prs: safe_schedule_event(x, y, f"click_{btn.name}_{'down' if prs else 'up'}"),
             on_scroll=lambda x, y, dx, dy: safe_schedule_scroll(x, y, dx, dy),
         )
         self._key_listener_factory = lambda: keyboard.Listener(
@@ -899,6 +899,7 @@ class Screen(Observer):
         x,
         y,
         tag: str,
+        highlight: bool = True,
         box_color: str = "red",
         box_width: int = 10,
     ) -> str:
@@ -915,6 +916,8 @@ class Screen(Observer):
             Mouse coordinates in logical points (relative to monitor)
         tag : str
             Filename tag
+        highlight : bool
+            When False, skip drawing the highlight overlays
         box_color : str
             Color for bounding box and crosshair
         box_width : int
@@ -944,36 +947,37 @@ class Screen(Observer):
         x_pixel = max(0, min(frame.width - 1, x_pixel))
         y_pixel = max(0, min(frame.height - 1, y_pixel))
 
-        # Calculate bounding box with smaller, more precise padding
-        # Use average scale for box size to handle non-uniform scaling
-        avg_scale = (scale_x + scale_y) / 2.0
-        box_size = int(30 * avg_scale)  # 30 logical points
-        x1 = max(0, x_pixel - box_size)
-        x2 = min(frame.width, x_pixel + box_size)
-        y1 = max(0, y_pixel - box_size)
-        y2 = min(frame.height, y_pixel + box_size)
+        if highlight:
+            # Calculate bounding box with smaller, more precise padding
+            # Use average scale for box size to handle non-uniform scaling
+            avg_scale = (scale_x + scale_y) / 2.0
+            box_size = int(30 * avg_scale)  # 30 logical points
+            x1 = max(0, x_pixel - box_size)
+            x2 = min(frame.width, x_pixel + box_size)
+            y1 = max(0, y_pixel - box_size)
+            y2 = min(frame.height, y_pixel + box_size)
 
-        # Draw the bounding box if coordinates are valid
-        if x1 < x2 and y1 < y2:
-            draw.rectangle([x1, y1, x2, y2], outline=box_color, width=box_width)
+            # Draw the bounding box if coordinates are valid
+            if x1 < x2 and y1 < y2:
+                draw.rectangle([x1, y1, x2, y2], outline=box_color, width=box_width)
 
-        # Draw a crosshair at the exact mouse position
-        crosshair_size = int(15 * avg_scale)  # 15 logical points
-        crosshair_width = max(2, int(3 * avg_scale))
+            # Draw a crosshair at the exact mouse position
+            crosshair_size = int(15 * avg_scale)  # 15 logical points
+            crosshair_width = max(2, int(3 * avg_scale))
 
-        # Horizontal line
-        h_x1 = max(0, x_pixel - crosshair_size)
-        h_x2 = min(frame.width, x_pixel + crosshair_size)
-        draw.line(
-            [(h_x1, y_pixel), (h_x2, y_pixel)], fill=box_color, width=crosshair_width
-        )
+            # Horizontal line
+            h_x1 = max(0, x_pixel - crosshair_size)
+            h_x2 = min(frame.width, x_pixel + crosshair_size)
+            draw.line(
+                [(h_x1, y_pixel), (h_x2, y_pixel)], fill=box_color, width=crosshair_width
+            )
 
-        # Vertical line
-        v_y1 = max(0, y_pixel - crosshair_size)
-        v_y2 = min(frame.height, y_pixel + crosshair_size)
-        draw.line(
-            [(x_pixel, v_y1), (x_pixel, v_y2)], fill=box_color, width=crosshair_width
-        )
+            # Vertical line
+            v_y1 = max(0, y_pixel - crosshair_size)
+            v_y2 = min(frame.height, y_pixel + crosshair_size)
+            draw.line(
+                [(x_pixel, v_y1), (x_pixel, v_y2)], fill=box_color, width=crosshair_width
+            )
 
         # Save with lower quality to reduce memory usage and disk I/O
         await self._run_in_thread(
@@ -1211,6 +1215,27 @@ class Screen(Observer):
 
             # ---- mouse event reception ----
             async def _handle_mouse_event(x: float, y: float, typ: str):
+                try:
+                    base, phase = typ.rsplit("_", 1)
+                except ValueError:
+                    if self.debug:
+                        log.info(f"Ignoring mouse event '{typ}' without phase suffix")
+                    return
+
+                if phase not in {"down", "up"}:
+                    return
+
+                if phase == "up":
+                    if self._pending_event is None:
+                        return
+
+                    async def delayed_flush():
+                        await asyncio.sleep(self._after_delay)
+                        await flush()
+
+                    asyncio.create_task(delayed_flush())
+                    return
+
                 # pynput returns screen coordinates (Y=0 at top), no conversion needed
                 _, _, _, gmax_y = await self._run_in_thread(_get_global_bounds)
                 screen_y = gmax_y - y
@@ -1256,22 +1281,23 @@ class Screen(Observer):
                 log.info(
                     f"{typ:<6} @({rel_x:7.1f},{rel_y:7.1f}) → win={idx}"
                 )
-
                 self._pending_event = {
-                    "type": typ,
+                    "type": base,
                     "position": (rel_x, rel_y),
                     "mon": idx,
                     "before": bf,
                     "monitor_rect": mon,
                 }
-
-                # Process asynchronously - don't wait for completion
-                asyncio.create_task(flush())
+                return
 
             # ---- keyboard event reception ----
             async def _handle_key_event(key, typ: str):
                 # Get current mouse position to determine active window
                 x, y = mouse.Controller().position
+
+                # pynput already returns Y=0 at top, no conversion needed
+                _, _, _, gmax_y = await self._run_in_thread(_get_global_bounds)
+                screen_y = gmax_y - y
 
                 # Check if point is in any of our tracked windows/regions
                 tracked = self._find_region_for_point(x, screen_y)
@@ -1287,9 +1313,6 @@ class Screen(Observer):
                     await self._update_tracked_regions()
 
                 mon = tracked["region"]
-                 # pynput already returns Y=0 at top, no conversion needed
-                _, _, _, gmax_y = await self._run_in_thread(_get_global_bounds)
-                screen_y = gmax_y - y
                 rel_x = x
                 rel_y = screen_y - mon["height"]
                 idx = self._tracked_windows.index(tracked) + 1  # 1-indexed for display
@@ -1338,7 +1361,7 @@ class Screen(Observer):
                     else:
                         # Continue existing session - save intermediate screenshot
                         screenshot_path = await self._save_frame(
-                            frame, mon, rel_x, rel_y, f"{step}_intermediate"
+                            frame, mon, rel_x, rel_y, f"{step}_intermediate", highlight=False
                         )
                         self._key_screenshots.append(screenshot_path)
                         log.info(
