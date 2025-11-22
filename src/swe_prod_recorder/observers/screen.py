@@ -117,8 +117,8 @@ def _get_visible_windows() -> List[tuple[dict, float]]:
         if w <= 0 or h <= 0:
             continue  # hidden or minimised
 
-        inv_y = gmax_y - y - h  # Quartz→Shapely Y‑flip
-        poly = box(x, inv_y, x + w, inv_y)
+        inv_y = gmax_y - y - h  # Quartz→Shapely Y‑flip (convert top edge)
+        poly = box(x, inv_y, x + w, inv_y + h)
         if poly.is_empty:
             continue
 
